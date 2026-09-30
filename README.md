@@ -7,6 +7,8 @@ that have no CRUD UI** — status codes, type lists, parameter tables, feature f
 stages edits in memory, shows the exact SQL they will run (parameterized and copy-ready
 literal), and applies them in a single transaction. First target DBMS: Microsoft SQL Server.
 
+**English** · [Español](README.es.md)
+
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![TUI](https://img.shields.io/badge/TUI-Textual-2b6cb0.svg)](https://textual.textualize.io/)
 [![DBMS: SQL Server](https://img.shields.io/badge/DBMS-SQL%20Server-CC2929.svg)](https://learn.microsoft.com/sql/sql-server/)
@@ -557,6 +559,7 @@ Stated plainly, because a list of them is more useful than a claim of completene
 
 | Document | What is in it |
 |---|---|
+| [README.es.md](README.es.md) | la traducción al español de este documento |
 | [SPEC.md](SPEC.md) | requirements (FR/S/NFR identifiers) and the safety rules (S-*) |
 | [DESIGN.md](DESIGN.md) | the design decisions behind those requirements |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | layering, the safety model, the concurrency story, testing strategy |
