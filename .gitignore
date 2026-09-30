@@ -4,6 +4,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+.import_linter_cache/
 .coverage
 htmlcov/
 dist/
@@ -12,3 +13,8 @@ build/
 uv.lock.bak
 # pytest-textual-snapshot writes this next to the repo root on failure
 snapshot_report.html
+
+# Cline / agent scratch space: this repo's own agent brief lives in AGENTS.md,
+# which IS committed. Only the tool-specific working memory is ignored.
+.clinerules/
+memory-bank/

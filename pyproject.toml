@@ -36,9 +36,9 @@ clipboard = ["pyperclip>=1.9"]
 standalone = ["pyinstaller>=6.11"]
 
 [project.urls]
-Homepage = "https://github.com/example/sql-table-swiss-knife"
-Source = "https://github.com/example/sql-table-swiss-knife"
-Issues = "https://github.com/example/sql-table-swiss-knife/issues"
+Homepage = "https://github.com/Chienwei82/sql-table-helper"
+Source = "https://github.com/Chienwei82/sql-table-helper"
+Issues = "https://github.com/Chienwei82/sql-table-helper/issues"
 
 [project.scripts]
 sql-table-swiss-knife = "sql_table_swiss_knife.cli:main"
