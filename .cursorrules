@@ -1,0 +1,16 @@
+# Cursor
+
+The full instructions for coding agents in this repository are in
+[AGENTS.md](AGENTS.md). Read it before making changes.
+
+The rules that will actually block you, in one place:
+
+1. `uv` only — `uv sync`, `uv add`, `uv run`. Never `pip install` into `.venv`.
+2. Run all five gates before claiming done: `ruff check .`, `ruff format --check .`,
+   `mypy`, `lint-imports`, `pytest`. Re-run them; never trust a recorded result.
+3. `services/` must never import `tui/`. `tui/` must never contain SQL or file I/O.
+   `domain/` imports nothing from the project but itself.
+4. Decisions belong in pure functions in `services/`, testable without a terminal.
+5. Every fix ships with a test that fails without the fix.
+
+Details, rationale and the full architecture are in [AGENTS.md](AGENTS.md).
