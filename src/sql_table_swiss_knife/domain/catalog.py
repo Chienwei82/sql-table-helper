@@ -339,6 +339,18 @@ class Table:
                 return column
         raise KeyError(f"{self.ref} has no column {name!r}")
 
+    def column_or_none(self, name: str) -> Column | None:
+        """The column with this name, or ``None``.
+
+        Used where a name may legitimately be stale (a refresh dropped the column, a
+        saved grid layout refers to a column that no longer exists) and degrading to "no
+        column" beats crashing the screen.
+        """
+        for column in self.columns:
+            if column.name == name:
+                return column
+        return None
+
     @property
     def summary(self) -> TableSummary:
         return TableSummary(

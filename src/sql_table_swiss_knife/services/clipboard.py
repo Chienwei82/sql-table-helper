@@ -1,0 +1,918 @@
+"""Clipboard encoding, parsing and paste planning (FR-4, DESIGN §9.5).
+
+This module is **pure**: it has no I/O, no terminal and no database. Everything the
+clipboard feature decides lives here as plain functions over plain values, which is what
+makes "what will this paste do?" answerable *before* anything is staged.
+
+The three questions the module answers:
+
+* **What does the clipboard say?** :func:`parse_block` turns pasted text into a
+  :class:`ClipboardBlock` — rows of cell text, with the delimiter family detected from
+  the payload itself (tab → TSV, comma/quotes → CSV, ``[`` → JSON, anything else a single
+  cell) and a header row detected from the table's own column names.
+* **What will it become?** :func:`plan_paste` maps that block onto the target columns,
+  converts each value against the column's declared type *and the user's locale settings*,
+  and classifies every row as UPDATE (a key that exists) or INSERT (a new row).
+* **How do we copy it out?** :func:`encode_block` writes TSV/CSV/JSON with the
+  configured NULL representation.
+
+Three behaviours are worth calling out, because they are where a naive implementation goes
+wrong, and each is a documented decision rather than an accident:
+
+* **Quoted fields.** A cell may legitimately contain a tab or a newline — Excel quotes it
+  (``"a\tb"``, ``"line1\nline2"``). The parser is RFC 4180 shaped for both delimiters, so
+  a multi-line cell stays *one* cell instead of shattering the block into rows.
+* **Locale.** ``1.234,56`` and ``31.01.2026`` are ordinary German text and nonsense as
+  SQL. ``number_locale`` / ``date_format`` convert them *before* validation, so the
+  configured convention is honoured rather than reported as a type error.
+* **NULL.** ``NULL`` as pasted text means SQL NULL by default, but an ``nvarchar`` column
+  may legitimately *contain* the word — so it is configurable (``null_token`` /
+  ``null_as_literal``) and the conversion result says which happened.
+
+The grid enters as *values plus keys* (:class:`PasteTarget`), never as a widget: that is
+what keeps "what will this paste do?" a pure function of data, testable without a
+terminal, and impossible to get out of step with what the Paste Preview dialog shows.
+"""
+
+import csv
+import io
+import json
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from enum import Enum
+
+from ..domain.catalog import Column, Table
+from ..domain.rows import RowKey
+from ..infra.errors import AppError
+from ..storage.settings import Settings
+from .validation import Hint, validate_input
+
+__all__ = [
+    "CellPlan",
+    "ClipboardBlock",
+    "ClipboardOptions",
+    "ClipboardParseError",
+    "PasteBlockFormat",
+    "PasteMode",
+    "PastePlan",
+    "PasteRowPlan",
+    "PasteTarget",
+    "RowOutcome",
+    "choose_mode",
+    "detect_format",
+    "encode_block",
+    "normalize_text",
+    "parse_block",
+    "plan_paste",
+    "value_to_text",
+]
+
+
+class ClipboardParseError(AppError):
+    """The pasted payload cannot be parsed at all (e.g. malformed JSON)."""
+
+
+class PasteBlockFormat(Enum):
+    """Delimiter family a pasted block arrived in (detected from the payload)."""
+
+    TSV = "tsv"
+    CSV = "csv"
+    JSON = "json"
+    SINGLE = "single"
+
+
+@dataclass(frozen=True, slots=True)
+class ClipboardOptions:
+    """Every knob the user can turn for copy/paste, gathered into one value.
+
+    The defaults are the shipped ``Settings`` defaults, so constructing this with no
+    arguments gives the behaviour a fresh install has.
+    """
+
+    #: Text written for SQL NULL on copy (FR-4.2); ``""`` by default.
+    null_repr: str = ""
+    #: Text that means SQL NULL on paste (FR-4.6); ``""`` disables the token.
+    null_token: str = "NULL"
+    #: When True ``null_token`` is pasted as ordinary text instead of NULL.
+    null_as_literal: bool = False
+    #: ``en`` (1,234.56) or ``de`` (1.234,56) number conventions.
+    number_locale: str = "en"
+    #: ``iso`` / ``dmy`` / ``mdy`` date conventions.
+    date_format: str = "iso"
+    #: Refuse blocks with more rows than this instead of staging them.
+    max_rows: int = 5000
+
+    def next_copy_format(self, current: str) -> str:
+        """The next format in the TSV → CSV → JSON cycle (DESIGN §9.2 ``p``)."""
+        order = ("tsv", "csv", "json")
+        try:
+            position = order.index(current)
+        except ValueError:
+            return order[0]
+        return order[(position + 1) % len(order)]
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> ClipboardOptions:
+        """Build the options from the user's ``settings.toml`` (DESIGN §13.2)."""
+        return cls(
+            null_repr=settings.copy_null_repr,
+            null_token=settings.paste_null_token,
+            null_as_literal=settings.paste_null_as_literal,
+            number_locale=settings.paste_number_locale,
+            date_format=settings.paste_date_format,
+            max_rows=settings.paste_max_rows,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ClipboardBlock:
+    """A parsed paste payload: rows of cell *text*, plus how it was detected.
+
+    The text is kept raw rather than converted: converting is a *decision* (which locale,
+    is this NULL, does it fit the column) and it belongs to the planner, where the user
+    can see it before anything is staged.
+    """
+
+    rows: tuple[tuple[str, ...], ...]
+    kind: PasteBlockFormat = PasteBlockFormat.SINGLE
+    #: The first row, when it was recognized as column *names* rather than data.
+    header: tuple[str, ...] | None = None
+    #: True when the source rows were not all the same width.
+    ragged: bool = False
+
+    @property
+    def row_count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def column_count(self) -> int:
+        return max((len(row) for row in self.rows), default=0)
+
+    @property
+    def is_single_cell(self) -> bool:
+        """One row of one cell: paste *into* the focused cell (FR-4.4)."""
+        return len(self.rows) == 1 and len(self.rows[0]) == 1
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.rows or all(not cell for row in self.rows for cell in row)
+
+    def data_rows(self) -> tuple[tuple[str, ...], ...]:
+        """The rows to map, i.e. without a detected header row."""
+        return self.rows[1:] if self.header is not None else self.rows
+
+
+#: Windows Excel writes a BOM; it is not part of the first column's name.
+_BOM = "﻿"
+#: Normalize CRLF/CR line endings and drop NUL bytes, which no cell can hold.
+_LINE_SPLIT = re.compile(r"\r\n?|\x00")
+_THOUSANDS_EN = re.compile(r"(?<=\d),(?=\d{3}\b)")
+_THOUSANDS_DE = re.compile(r"(?<=\d)\.(?=\d{3}\b)")
+
+
+def parse_block(
+    text: str,
+    *,
+    known_columns: Sequence[str] = (),
+) -> ClipboardBlock:
+    """Parse pasted ``text`` into rows of cell text.
+
+    The delimiter family is detected rather than asked for, because the user pasted
+    *something* and expects it to work: a tab makes it TSV (what Excel and Sheets produce),
+    a leading ``[``/``{`` makes it JSON, a comma or quote makes it CSV, and anything else
+    is one value pasted into one cell (FR-4.4).
+
+    A UTF-8 BOM and CRLF line endings are normalized away, and ragged rows are padded so a
+    block that lost its last columns mid-copy still maps cleanly — the missing cells become
+    empty strings, which the NULL rules then decide.
+    """
+    cleaned = _LINE_SPLIT.sub("\n", text).lstrip(_BOM)
+    if not cleaned.strip():
+        return ClipboardBlock((), PasteBlockFormat.SINGLE)
+    kind = detect_format(cleaned)
+    if kind is PasteBlockFormat.JSON:
+        rows, header = _parse_json(cleaned)
+    else:
+        delimiter = "\t" if kind is PasteBlockFormat.TSV else ","
+        rows, header = _parse_delimited(cleaned, delimiter, known_columns)
+    width = max((len(row) for row in rows), default=0)
+    ragged = any(len(row) != width for row in rows)
+    padded = tuple(tuple(row) + ("",) * (width - len(row)) for row in rows)
+    return ClipboardBlock(padded, kind, header, ragged)
+
+
+def detect_format(text: str) -> PasteBlockFormat:
+    """Which delimiter family ``text`` looks like (see :func:`parse_block`)."""
+    stripped = text.strip()
+    if stripped[:1] in {"[", "{"}:
+        return PasteBlockFormat.JSON
+    first_line = stripped.split("\n", 1)[0]
+    if "\t" in first_line:
+        return PasteBlockFormat.TSV
+    if "," in first_line or '"' in first_line:
+        return PasteBlockFormat.CSV
+    if "\n" in stripped:
+        # Newlines but no delimiter: several rows of a single column (a vertical paste).
+        return PasteBlockFormat.TSV
+    return PasteBlockFormat.SINGLE
+
+
+def _parse_delimited(
+    text: str, delimiter: str, known_columns: Sequence[str]
+) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...] | None]:
+    """RFC 4180 parsing for both delimiters, plus header detection."""
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, quotechar='"')
+    rows = [tuple(row) for row in reader if row]
+    if not rows:
+        return (), None
+    header = rows[0] if _looks_like_header(rows[0], known_columns) else None
+    return tuple(rows), header
+
+
+def _looks_like_header(row: Sequence[str], known_columns: Sequence[str]) -> bool:
+    """True when the row looks like column *names* rather than data (FR-4.6).
+
+    The test is "most of the cells name columns of this table", not "all of them": an Excel
+    export of five columns of ours plus two of a join usually carries a header the table
+    cannot place, and demanding a perfect match would silently paste ``Code`` and ``Name``
+    *as data* — writing the words into the first two columns. A row where only a minority of
+    the cells match is still treated as data, which is the case that matters (a value that
+    happens to equal a column name).
+    """
+    if not row or not known_columns:
+        return False
+    lowered = {name.lower() for name in known_columns}
+    cells = [cell.strip() for cell in row if cell.strip()]
+    if not cells:
+        return False
+    matches = sum(1 for cell in cells if cell.lower() in lowered)
+    return matches >= max(1, (len(cells) + 1) // 2)
+
+
+def _parse_json(text: str) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...] | None]:
+    """JSON payloads: an array of objects, an array of arrays, or one scalar/object.
+
+    Malformed JSON raises :class:`ClipboardParseError` rather than producing a confusing
+    single-cell plan: the user needs to know their JSON was wrong, not that one cell will
+    change.
+    """
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ClipboardParseError(f"this does not look like valid JSON: {exc}") from exc
+    if isinstance(document, list):
+        if not document:
+            return (), None
+        if all(isinstance(item, dict) for item in document):
+            header: list[str] = []
+            for item in document:
+                for name in item:
+                    if name not in header:
+                        header.append(str(name))
+            rows = tuple(tuple(_json_cell(item.get(name)) for name in header) for item in document)
+            return rows, tuple(header)
+        return tuple(tuple(_json_cell(value) for value in row) for row in document), None
+    if isinstance(document, dict):
+        single_header = tuple(str(name) for name in document)
+        return (tuple(_json_cell(value) for value in document.values()),), single_header
+    return ((str(document),),), None
+
+
+def _json_cell(value: object) -> str:
+    """One JSON value as cell text; ``null`` becomes an empty cell (→ SQL NULL)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
+
+
+def value_to_text(value: object, *, null_repr: str = "") -> str:
+    """The text a value is copied as (FR-4.2).
+
+    ``None`` becomes ``null_repr`` — empty by default, so a spreadsheet shows a blank
+    cell, or the literal ``NULL`` when the user prefers to see it. Bytes go out as hex
+    (the only lossless text form) and booleans as ``1``/``0``, matching what the grid shows
+    and what the cell editor accepts back.
+    """
+    if value is None:
+        return null_repr
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, bytes | bytearray | memoryview):
+        return "0x" + bytes(value).hex()
+    if isinstance(value, Decimal):
+        # ``Decimal("1E+2")`` would copy as ``1E+2``, which no spreadsheet reads back.
+        return format(value, "f")
+    return str(value)
+
+
+def encode_block(
+    columns: Sequence[str],
+    rows: Sequence[Sequence[object]],
+    *,
+    fmt: str = "tsv",
+    include_header: bool = False,
+    options: ClipboardOptions | None = None,
+) -> str:
+    """Encode a rectangular block as TSV, CSV or JSON (FR-4.2).
+
+    TSV is the default because it pastes straight into Excel and Sheets. Quoting follows
+    RFC 4180 for both text formats — a value containing the delimiter, a quote or a newline
+    is quoted and its quotes doubled — which is exactly what Excel writes and therefore what
+    :func:`parse_block` reads back. JSON emits an array of objects keyed by column name (or
+    a bare array of arrays without a header), because that is the form a person or a script
+    can read back.
+    """
+    opts = options or ClipboardOptions()
+    if fmt == "json":
+        document: object = (
+            [dict(zip(columns, row, strict=False)) for row in rows]
+            if include_header
+            else [list(row) for row in rows]
+        )
+        return json.dumps(document, indent=2, ensure_ascii=False, default=str)
+    delimiter = "\t" if fmt == "tsv" else ","
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(
+        buffer,
+        delimiter=delimiter,
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL,
+        lineterminator="\n",
+    )
+    if include_header:
+        writer.writerow(list(columns))
+    for row in rows:
+        writer.writerow([value_to_text(value, null_repr=opts.null_repr) for value in row])
+    return buffer.getvalue().rstrip("\n")
+
+
+def normalize_text(text: str, column: Column, options: ClipboardOptions) -> str:
+    """Rewrite pasted text into the column's canonical form before validation.
+
+    Only the *shape* of the text changes — whether the result is acceptable is still
+    decided by :func:`~services.validation.validate_input`, which owns the column rules:
+
+    * the NULL token (case-insensitively) becomes the empty string, which validation reads
+      as SQL NULL — unless ``null_as_literal`` is set, in which case the word stays text;
+    * numbers lose their thousands separators and, for ``de``, trade their comma for a
+      decimal point (``1.234,56`` → ``1234.56``);
+    * dates are re-ordered into ISO for ``dmy``/``mdy`` (``31.01.2026`` → ``2026-01-31``),
+      accepting ``.``, ``-`` and ``/`` as separators because all three occur in the wild.
+    """
+    stripped = text.strip()
+    if (
+        options.null_token
+        and not options.null_as_literal
+        and stripped.upper() == options.null_token.upper()
+    ):
+        return ""
+    kind = column.data_type.lower()
+    if kind in _NUMERIC_TYPES:
+        return _normalize_number(stripped, options.number_locale)
+    if kind in _DATE_TYPES:
+        return _normalize_date(stripped, options.date_format)
+    if kind in _DATETIME_TYPES:
+        day, rest = _split_date_time(stripped)
+        converted = _normalize_date(day, options.date_format)
+        return f"{converted}T{rest}" if rest else converted
+    return stripped
+
+
+#: Column types whose text is a number, and so gets locale treatment.
+_NUMERIC_TYPES = {
+    "tinyint",
+    "smallint",
+    "int",
+    "bigint",
+    "decimal",
+    "numeric",
+    "money",
+    "smallmoney",
+    "float",
+    "real",
+}
+_TEXT_TYPES = {
+    "char",
+    "varchar",
+    "nchar",
+    "nvarchar",
+    "text",
+    "ntext",
+    "xml",
+    "uniqueidentifier",
+}
+_DATE_TYPES = {"date"}
+_DATETIME_TYPES = {"datetime", "datetime2", "smalldatetime", "datetimeoffset"}
+
+
+def _normalize_number(text: str, locale: str) -> str:
+    """Strip thousands separators and localize the decimal point."""
+    if not text:
+        return text
+    body = text
+    negative = False
+    if body.startswith("(") and body.endswith(")"):
+        # Accounting notation for negatives: (1.234,56) → -1234.56
+        body, negative = body[1:-1].strip(), True
+    if locale == "de":
+        body = _THOUSANDS_DE.sub("", body).replace(",", ".")
+    else:
+        body = _THOUSANDS_EN.sub("", body)
+    return f"-{body}" if negative and not body.startswith("-") else body
+
+
+def _split_date_time(text: str) -> tuple[str, str]:
+    """Split ``2026-01-31 12:30:00`` into its date and time halves."""
+    for separator in (" ", "T"):
+        if separator in text:
+            head, _, tail = text.partition(separator)
+            return head.strip(), tail.strip()
+    return text.strip(), ""
+
+
+def _normalize_date(text: str, date_format: str) -> str:
+    """Re-order a day-first / month-first date into ISO ``YYYY-MM-DD``."""
+    if date_format == "iso" or not text:
+        return text
+    parts = re.split(r"[./-]", text)
+    if len(parts) != 3:
+        return text  # a time, or something unrecognizable: leave it to validation
+    first, second, third = (part.strip() for part in parts)
+    if not (first.isdigit() and second.isdigit() and third.isdigit()):
+        return text
+    if len(first) == 4:  # already year-first: only the separators differ
+        return text
+    day, month = (first, second) if date_format == "dmy" else (second, first)
+    try:
+        parsed = date(int(third), int(month), int(day))
+    except ValueError:
+        return text  # 31.02.2026 is not a date; validation will say so properly
+    return parsed.isoformat()
+
+
+class PasteMode(Enum):
+    """How a block should land in the grid (FR-4.4 to FR-4.6)."""
+
+    #: One value into the focused cell (FR-4.4).
+    CELL = "cell"
+    #: A block over existing cells (FR-4.5).
+    FILL = "fill"
+    #: Whole rows: UPDATE where the key matches, INSERT otherwise (FR-4.6).
+    ROWS = "rows"
+
+
+class RowOutcome(Enum):
+    """What will happen to one pasted row — the UPDATE/INSERT split FR-4.6 asks for."""
+
+    UPDATE = "update"
+    INSERT = "insert"
+
+
+@dataclass(frozen=True, slots=True)
+class CellPlan:
+    """One target cell: the column, the pasted text, the converted value and any error."""
+
+    column: str
+    text: str
+    value: object
+    ok: bool
+    hints: tuple[Hint, ...] = ()
+
+    @property
+    def error(self) -> str:
+        """The first blocking message, or ``""``."""
+        for hint in self.hints:
+            if hint.is_error:
+                return hint.text
+        return ""
+
+    @property
+    def converted(self) -> str:
+        """The value as it will be stored — the preview's "type conversion" column."""
+        return value_to_text(self.value)
+
+
+@dataclass(frozen=True, slots=True)
+class PasteRowPlan:
+    """One pasted row: which row it lands on and whether it updates or inserts."""
+
+    index: int
+    outcome: RowOutcome
+    #: Row index in the grid; ``None`` for an INSERT, which gets a brand new row.
+    target_row: int | None
+    key: RowKey | None
+    values: tuple[CellPlan, ...]
+
+    @property
+    def errors(self) -> tuple[str, ...]:
+        return tuple(cell.error for cell in self.values if cell.error)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+@dataclass(frozen=True, slots=True)
+class PastePlan:
+    """The complete, reviewable answer to "what will this paste do?".
+
+    Nothing is staged when this exists — the Paste Preview dialog renders it, and only a
+    confirmed plan reaches :meth:`services.changes.ChangeService.stage_paste`. A plan with
+    errors is not staged at all, which is FR-4.6's "nothing is staged half-parsed".
+    """
+
+    mode: PasteMode
+    rows: tuple[PasteRowPlan, ...]
+    #: ``source name → target column``; empty when the mapping is purely positional.
+    mapping: tuple[tuple[str, str], ...] = ()
+    #: Target columns the block does not touch (left as they are).
+    untouched: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+    #: True when a header row was mapped by name rather than by position.
+    used_header: bool = False
+
+    @property
+    def updates(self) -> tuple[PasteRowPlan, ...]:
+        return tuple(row for row in self.rows if row.outcome is RowOutcome.UPDATE)
+
+    @property
+    def inserts(self) -> tuple[PasteRowPlan, ...]:
+        return tuple(row for row in self.rows if row.outcome is RowOutcome.INSERT)
+
+    @property
+    def cell_count(self) -> int:
+        return sum(len(row.values) for row in self.rows)
+
+    @property
+    def errors(self) -> tuple[str, ...]:
+        """Every blocking message, row-prefixed so the user can find the cell."""
+        return tuple(f"row {row.index + 1}: {error}" for row in self.rows for error in row.errors)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+    def summary(self) -> str:
+        """``2 updates, 3 inserts · 15 cells`` for the preview's title line."""
+        parts: list[str] = []
+        for rows, word in ((self.updates, "update"), (self.inserts, "insert")):
+            if rows:
+                parts.append(f"{len(rows)} {word}{'s' if len(rows) != 1 else ''}")
+        head = ", ".join(parts) if parts else "nothing to paste"
+        return f"{head} · {self.cell_count} cell(s)"
+
+    def describe_mapping(self) -> str:
+        """``Name → Name, Population → Population`` / ``positional``."""
+        if self.mapping:
+            return ", ".join(f"{source} → {target}" for source, target in self.mapping)
+        return "positional"
+
+
+@dataclass(frozen=True, slots=True)
+class PasteTarget:
+    """Where a paste lands: the table, the anchor cell and the rows already loaded.
+
+    The grid arrives as *values plus keys* rather than as a widget, so planning stays a
+    pure function of data. ``keys[i]`` is the row's identity, or ``None`` for a row with no
+    usable key — such a row is read-only (S-4) and can never be the target of an UPDATE.
+    """
+
+    table: Table
+    #: Visible columns in display order — what positional mapping walks.
+    columns: tuple[Column, ...]
+    #: The loaded rows (staged values already overlaid by the caller).
+    rows: tuple[Mapping[str, object], ...]
+    #: Row identity per loaded row; ``None`` where the row has none.
+    keys: tuple[RowKey | None, ...] = ()
+    #: The grid cursor as ``(row index, column index)``.
+    anchor_row: int = 0
+    anchor_column: int = 0
+    #: An explicit selection as ``(top, left, bottom, right)``, inclusive, or ``None``.
+    selection: tuple[int, int, int, int] | None = None
+
+    def row_key(self, index: int) -> RowKey | None:
+        if 0 <= index < len(self.keys):
+            return self.keys[index]
+        return None
+
+    def key_index(self) -> dict[RowKey, int]:
+        """Existing identities mapped to their grid row (for UPDATE detection)."""
+        return {key: index for index, key in enumerate(self.keys) if key is not None}
+
+    def column_index(self, name: str) -> int | None:
+        for index, column in enumerate(self.columns):
+            if column.name == name:
+                return index
+        return None
+
+
+def choose_mode(target: PasteTarget, block: ClipboardBlock) -> PasteMode:
+    """Decide whether a paste fills cells or lands as rows (FR-4.5/4.6).
+
+    The rule follows what the user is looking at:
+
+    * one cell of text → that cell (FR-4.4);
+    * a rectangular block matching an explicit selection → that selection (FR-4.5);
+    * anything with several rows → rows, so a multi-line paste never silently overwrites
+      the cells below the cursor.
+
+    A single value pasted over a multi-cell selection fills the whole selection, which is
+    what spreadsheets do and what people expect when they copy one cell and paste it across.
+    """
+    selection = target.selection
+    if selection is not None and _fills_selection(block, selection):
+        # A selection always wins, including for a single value: pasting one cell across a
+        # range is what every spreadsheet does, and it is the only way a paste can *not*
+        # mean "insert rows" when the user has visibly marked a range.
+        return PasteMode.FILL
+    if block.is_single_cell:
+        return PasteMode.CELL
+    if block.column_count == 1 and _is_text_column(target, target.anchor_column):
+        # Newlines down one column are a *value* with line breaks, not rows to insert —
+        # pasting a description into an nvarchar cell must not create N rows.
+        return PasteMode.CELL
+    return PasteMode.ROWS
+
+
+def _is_text_column(target: PasteTarget, index: int) -> bool:
+    """True when the column at ``index`` stores text (so newlines are data, not rows)."""
+    column = _column_at(target, index)
+    return column is not None and column.data_type.lower() in _TEXT_TYPES
+
+
+def _fills_selection(block: ClipboardBlock, selection: tuple[int, int, int, int]) -> bool:
+    """True when the block's shape matches the selection — or is one cell filling it."""
+    top, left, bottom, right = selection
+    span = (bottom - top + 1, right - left + 1)
+    return (block.row_count, block.column_count) in {span, (1, 1)}
+
+
+def plan_paste(
+    target: PasteTarget,
+    block: ClipboardBlock,
+    *,
+    options: ClipboardOptions | None = None,
+    mode: PasteMode | None = None,
+) -> PastePlan:
+    """Map ``block`` onto ``target`` and convert every value — staging nothing.
+
+    Args:
+        target: The table, the visible columns and the loaded rows.
+        block: The parsed clipboard payload.
+        options: Locale / NULL / row-limit settings; defaults to the shipped ones.
+        mode: Force a mode; by default :func:`choose_mode` picks one.
+
+    Returns:
+        A :class:`PastePlan` whose ``errors`` are per-cell and blocking: the caller shows
+        them and stages nothing.
+    """
+    opts = options or ClipboardOptions()
+    chosen = mode or choose_mode(target, block)
+    notes: list[str] = []
+    if block.row_count > opts.max_rows:
+        notes.append(
+            f"the block has {block.row_count} rows, over the paste_max_rows limit "
+            f"of {opts.max_rows}"
+        )
+        return PastePlan(chosen, (), notes=tuple(notes))
+    if block.is_empty:
+        return PastePlan(chosen, (), notes=("the pasted text is empty",))
+    if chosen is PasteMode.CELL:
+        return _plan_cell(target, block, opts)
+    columns, mapping, untouched, used_header = _resolve_columns(target, block, chosen, notes)
+    if chosen is PasteMode.FILL:
+        rows = _plan_fill(target, block, columns, opts)
+    else:
+        rows = _plan_rows(target, block, columns, opts, notes)
+    return PastePlan(
+        chosen,
+        rows,
+        mapping=mapping,
+        untouched=untouched,
+        notes=tuple(notes),
+        used_header=used_header,
+    )
+
+
+def _plan_cell(target: PasteTarget, block: ClipboardBlock, opts: ClipboardOptions) -> PastePlan:
+    """One value into the focused cell — including a multi-line string (FR-4.4).
+
+    A single-column payload stays *one* cell: a value containing newlines is a legitimate
+    ``nvarchar`` value, and splitting it into rows would insert rows nobody asked for.
+    """
+    column = _column_at(target, target.anchor_column)
+    if column is None:
+        return PastePlan(PasteMode.CELL, (), notes=("there is no column at the cursor",))
+    text = (
+        "\n".join(row[0] for row in block.rows)
+        if block.column_count == 1
+        else "\n".join("\t".join(row) for row in block.rows)
+    )
+    row = PasteRowPlan(
+        0,
+        RowOutcome.UPDATE,
+        target.anchor_row,
+        target.row_key(target.anchor_row),
+        _convert_row(target.table, text, (column,), opts),
+    )
+    return PastePlan(
+        PasteMode.CELL,
+        (row,),
+        mapping=((column.name, column.name),),
+        untouched=tuple(c.name for c in target.columns if c.name != column.name),
+    )
+
+
+def _plan_fill(
+    target: PasteTarget,
+    block: ClipboardBlock,
+    columns: tuple[Column | None, ...],
+    opts: ClipboardOptions,
+) -> tuple[PasteRowPlan, ...]:
+    """Fill existing cells from the anchor (or the selection) across the block (FR-4.5)."""
+    top, _, bottom, _ = target.selection or (
+        target.anchor_row,
+        target.anchor_column,
+        target.anchor_row + block.row_count - 1,
+        target.anchor_column + block.column_count - 1,
+    )
+    # One pasted value fills the whole selection (across and down); a block fills it
+    # cell-for-cell and stops at the end of the range (FR-4.5).
+    source_rows = block.data_rows()
+    span = list(range(top, bottom + 1)) or [top]
+    plans: list[PasteRowPlan] = []
+    for offset, row_index in enumerate(span):
+        if row_index >= len(target.rows):
+            break  # the grid ends here: the rest of the block is not pasted
+        if block.is_single_cell:
+            text_row = source_rows[0]
+            source = _broadcast_row(text_row, columns)
+        else:
+            if offset >= len(source_rows):
+                break
+            text_row = source_rows[offset]
+            source = text_row
+        plans.append(
+            PasteRowPlan(
+                offset,
+                RowOutcome.UPDATE,
+                row_index,
+                target.row_key(row_index),
+                _convert_block_row(target.table, source, columns, opts),
+            )
+        )
+    return tuple(plans)
+
+
+def _broadcast_row(text_row: Sequence[str], columns: Sequence[Column | None]) -> tuple[str, ...]:
+    """Repeat one pasted value across a whole row (the single-cell fill, FR-4.5)."""
+    value = text_row[0] if text_row else ""
+    return tuple(value for _ in columns)
+
+
+def _plan_rows(
+    target: PasteTarget,
+    block: ClipboardBlock,
+    columns: tuple[Column | None, ...],
+    opts: ClipboardOptions,
+    notes: list[str],
+) -> tuple[PasteRowPlan, ...]:
+    """Land whole rows: UPDATE the ones whose key exists, INSERT the rest (FR-4.6)."""
+    existing = target.key_index()
+    identity = target.table.identity_columns
+    mapped = tuple(column.name for column in columns if column is not None)
+    keyed = bool(identity) and all(name in mapped for name in identity)
+    notes.append(
+        f"rows carrying {', '.join(identity)} will UPDATE a matching row"
+        if keyed
+        else (
+            f"the block does not carry every key column ({', '.join(identity) or 'none'}) "
+            "— every row is INSERTed"
+        )
+    )
+    plans: list[PasteRowPlan] = []
+    for offset, text_row in enumerate(block.data_rows()):
+        cells = _convert_block_row(target.table, text_row, columns, opts)
+        key = _row_key_from_cells(identity, cells) if keyed else None
+        row_index = existing.get(key) if key is not None else None
+        plans.append(
+            PasteRowPlan(
+                offset,
+                RowOutcome.UPDATE if row_index is not None else RowOutcome.INSERT,
+                row_index,
+                key,
+                cells,
+            )
+        )
+    return tuple(plans)
+
+
+def _row_key_from_cells(identity: Sequence[str], cells: Sequence[CellPlan]) -> RowKey | None:
+    """Build the row identity from the pasted key cells, or ``None`` if one is missing."""
+    by_name = {cell.column: cell for cell in cells}
+    pairs: list[tuple[str, object]] = []
+    for name in identity:
+        cell = by_name.get(name)
+        if cell is None or not cell.ok or cell.value is None:
+            return None  # an incomplete key cannot match an existing row
+        pairs.append((name, cell.value))
+    return tuple(pairs) if pairs else None
+
+
+def _convert_block_row(
+    table: Table,
+    text_row: Sequence[str],
+    columns: Sequence[Column | None],
+    opts: ClipboardOptions,
+) -> tuple[CellPlan, ...]:
+    """Convert one source row against the resolved columns, skipping the skipped ones."""
+    return tuple(
+        _convert_cell(table, column, text_row[index] if index < len(text_row) else "", opts)
+        for index, column in enumerate(columns)
+        if column is not None
+    )
+
+
+def _convert_row(
+    table: Table, text: str, columns: Sequence[Column], opts: ClipboardOptions
+) -> tuple[CellPlan, ...]:
+    return tuple(_convert_cell(table, column, text, opts) for column in columns)
+
+
+def _convert_cell(table: Table, column: Column, text: str, opts: ClipboardOptions) -> CellPlan:
+    """Normalize then validate one cell; the plan carries the text, the value and errors.
+
+    The *same* :func:`~services.validation.validate_input` the cell editor uses decides
+    acceptability, so a pasted value is refused in exactly the cases typing it would be.
+    """
+    parsed = validate_input(table, column, normalize_text(text, column, opts))
+    return CellPlan(column.name, text, parsed.value, parsed.ok, parsed.hints)
+
+
+def _resolve_columns(
+    target: PasteTarget, block: ClipboardBlock, mode: PasteMode, notes: list[str]
+) -> tuple[tuple[Column | None, ...], tuple[tuple[str, str], ...], tuple[str, ...], bool]:
+    """Which target column each source cell goes to, and what is left untouched.
+
+    A detected header row maps *by name* (FR-4.6: an Excel header row must not be pasted as
+    data), which also lets the block skip columns the table does not have. Otherwise the
+    mapping is positional, starting at the anchor column for a fill and at the first column
+    for a row insert — FR-4.6's "map positionally to visible/editable columns".
+    """
+    if block.header is not None:
+        columns: list[Column | None] = []
+        pairs: list[tuple[str, str]] = []
+        matched: set[str] = set()
+        for name in block.header:
+            column = target.table.column_or_none(name)
+            if column is None:
+                columns.append(None)
+                notes.append(f"there is no column named {name!r} — that column is ignored")
+                continue
+            if column.is_server_managed:
+                columns.append(None)
+                notes.append(f"{column.name} is server-managed (S-3) — not written")
+                continue
+            columns.append(column)
+            matched.add(column.name)
+            pairs.append((name, column.name))
+        untouched = tuple(c.name for c in target.columns if c.name not in matched)
+        return tuple(columns), tuple(pairs), untouched, True
+    start = target.anchor_column if mode is PasteMode.FILL else 0
+    columns = [
+        target.columns[start + index] if start + index < len(target.columns) else None
+        for index in range(block.column_count)
+    ]
+    if mode is PasteMode.ROWS:
+        # A positional row insert must never write identity/computed columns implicitly:
+        # the user has not opted into IDENTITY_INSERT (S-3), and a computed column cannot
+        # be written at all.
+        identity = set(target.table.identity_columns)
+        columns = [
+            None
+            if column is not None and (column.is_server_managed or column.name in identity)
+            else column
+            for column in columns
+        ]
+    named = tuple(
+        (f"column {index + 1}", column.name)
+        for index, column in enumerate(columns)
+        if column is not None
+    )
+    untouched = tuple(
+        column.name for column in target.columns if column.name not in {n for _, n in named}
+    )
+    return tuple(columns), named, untouched, False
+
+
+def _column_at(target: PasteTarget, index: int) -> Column | None:
+    if 0 <= index < len(target.columns):
+        return target.columns[index]
+    return None

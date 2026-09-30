@@ -1,4 +1,4 @@
-"""Textual snapshot tests for the M3 screens (DESIGN §11).
+"""Textual snapshot tests for the M3/M4 screens (DESIGN §11).
 
 The SVG snapshots are the visual contract of the milestone: they catch a regression in
 layout, badges, hints or theming that a behavioural assertion would happily miss.
@@ -17,12 +17,20 @@ from pathlib import Path
 from textual.app import App
 from textual.pilot import Pilot
 
+from sql_table_swiss_knife.domain.catalog import Table
 from sql_table_swiss_knife.providers import ConnectError
 from sql_table_swiss_knife.storage import ProfileStore
 from sql_table_swiss_knife.tui.app import SwissKnifeApp
 from sql_table_swiss_knife.tui.screens import TableBrowserScreen, TableEditorScreen
 from tests.fakes import FakeProvider
-from tests.tui.conftest import AUDIT, SAMPLE_TABLES, AppFactory, no_database_profile
+from tests.tui.conftest import (
+    AUDIT,
+    COUNTRY,
+    CUSTOMER_VIEW,
+    SAMPLE_TABLES,
+    AppFactory,
+    no_database_profile,
+)
 
 #: Signature of pytest-textual-snapshot's ``snap_compare`` fixture.
 #:
@@ -114,17 +122,57 @@ def test_table_browser_no_matches(
     snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
 
 
-def test_table_editor_placeholder(
+async def _open_table(pilot: Pilot[App[None]], table: Table) -> None:
+    """Connect and open ``table`` in the editor workspace, then let the workers finish."""
+    app = pilot.app
+    assert isinstance(app, SwissKnifeApp)
+    await app.connection.connect(app.connection.get_profile("catalog"))
+    app.push_screen(TableEditorScreen(table.summary))
+    await _settle(pilot)
+
+
+def test_table_editor_split_view(
     snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:
-    """The M3 editor: object identity, badges, and an honest "M4 comes next" note."""
+    """M4: data grid on the left, inspector (summary + warnings + columns) on the right."""
 
     async def run_before(pilot: Pilot[App[None]]) -> None:
-        app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
-        await app.connection.connect(seeded_profiles.get("catalog"))
-        app.push_screen(TableEditorScreen(AUDIT.summary))
+        await _open_table(pilot, COUNTRY)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_table_editor_read_only_table(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A table without a primary key: the warnings banner and the read-only verdict."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, AUDIT)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_table_editor_inspector_collapsed(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """F2 hides the panel; the grid keeps the full width."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, COUNTRY)
+        await pilot.press("f2")
         await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_table_editor_view_with_instead_of_trigger(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """The strongest warning: an INSTEAD OF trigger on a view (views are read-only)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, CUSTOMER_VIEW)
 
     snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
 

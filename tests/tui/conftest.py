@@ -14,12 +14,17 @@ from textual.app import App
 
 from sql_table_swiss_knife.domain import (
     AuthMode,
+    CheckConstraint,
     Column,
     ConnectionProfile,
+    ForeignKey,
+    IncomingForeignKey,
     PrimaryKey,
+    ReferentialAction,
     Table,
     TableKind,
     Trigger,
+    UniqueConstraint,
 )
 from sql_table_swiss_knife.storage import (
     EphemeralSecretStore,
@@ -31,16 +36,61 @@ from tests.fakes import FakeProvider
 
 # -- catalog used by the picker tests ----------------------------------
 
+#: A rich table: PK, UNIQUE, CHECK, default, identity FK, computed, rowversion, an AFTER
+#: trigger, a collation and an incoming FK — one of everything the inspector renders.
 COUNTRY = Table(
     schema="dbo",
     name="Country",
     kind=TableKind.BASE_TABLE,
     columns=(
         Column("Code", 1, "char", 2, None, None, False, None, False, is_primary_key=True),
-        Column("Name", 2, "nvarchar", 100, None, None, False, None, False),
+        Column("Name", 2, "nvarchar", 200, None, None, False, None, False),
+        Column(
+            "Population",
+            3,
+            "int",
+            None,
+            10,
+            0,
+            False,
+            "0",
+            False,
+            is_primary_key=False,
+        ),
+        Column(
+            "NameUpper",
+            4,
+            "nvarchar",
+            200,
+            None,
+            None,
+            True,
+            None,
+            False,
+            is_computed=True,
+            computed_definition="UPPER([Name])",
+        ),
+        Column("RowVer", 5, "rowversion", 8, None, None, False, None, False, is_rowversion=True),
     ),
     primary_key=PrimaryKey("PK_Country", ("Code",)),
-    approximate_row_count=3,
+    unique_constraints=(UniqueConstraint("UQ_Country_Name", ("Name",)),),
+    check_constraints=(CheckConstraint("CK_Country_Population", "([Population]>=(0))"),),
+    triggers=(
+        Trigger("trg_Country_Audit", ("UPDATE",), "AFTER"),
+        Trigger("trg_Country_Off", ("INSERT",), "AFTER", enabled=False),
+    ),
+    approximate_row_count=5,
+    incoming_foreign_keys=(
+        IncomingForeignKey(
+            "FK_Region_Country",
+            "dbo",
+            "Region",
+            ("CountryCode",),
+            ("Code",),
+            ReferentialAction.CASCADE,
+            ReferentialAction.NO_ACTION,
+        ),
+    ),
 )
 
 #: No primary key -> ⚠ badge and read-only rows (S-4).
@@ -52,16 +102,39 @@ AUDIT = Table(
     triggers=(Trigger("trg_Audit", ("INSERT",), "AFTER"),),
 )
 
-#: Foreign keys and a trigger -> 🔗 and ⚡ badges.
+#: An identity PK, a foreign key to Country and a trigger -> 🔗 and ⚡ badges. The FK is
+#: what the lookup picker opens on, so the editing tests have a reference to look up.
 ORDER = Table(
     schema="sales",
     name="Order",
     kind=TableKind.BASE_TABLE,
     columns=(
         Column("Id", 1, "int", None, 10, 0, False, None, True, is_primary_key=True),
-        Column("CountryCode", 2, "char", 2, None, None, False, None, False),
+        Column(
+            "CountryCode",
+            2,
+            "char",
+            2,
+            None,
+            None,
+            False,
+            None,
+            False,
+            is_foreign_key=True,
+        ),
     ),
     primary_key=PrimaryKey("PK_Order", ("Id",)),
+    foreign_keys=(
+        ForeignKey(
+            "FK_Order_Country",
+            ("CountryCode",),
+            "dbo",
+            "Country",
+            ("Code",),
+            ReferentialAction.NO_ACTION,
+            ReferentialAction.NO_ACTION,
+        ),
+    ),
     triggers=(Trigger("trg_Order", ("UPDATE",), "AFTER"),),
 )
 
@@ -70,6 +143,7 @@ CUSTOMER_VIEW = Table(
     name="v_Customer",
     kind=TableKind.VIEW,
     columns=(Column("Code", 1, "char", 2, None, None, False, None, False),),
+    triggers=(Trigger("trg_v_Customer_IO", ("INSERT", "UPDATE"), "INSTEAD OF"),),
 )
 
 SAMPLE_TABLES: tuple[Table, ...] = (COUNTRY, AUDIT, ORDER, CUSTOMER_VIEW)
@@ -101,10 +175,40 @@ def no_database_profile(name: str = "no-db") -> ConnectionProfile:
     )
 
 
+#: Rows the fake provider serves, keyed by bare table name (FakeProvider's convention).
+SAMPLE_ROWS: dict[str, list[dict[str, object]]] = {
+    "Country": [
+        {"Code": "DE", "Name": "Germany", "Population": 83_000_000, "RowVer": b"\x01"},
+        {"Code": "FR", "Name": "France", "Population": 67_000_000, "RowVer": b"\x02"},
+        {"Code": "JP", "Name": "Japan", "Population": 125_000_000, "RowVer": b"\x03"},
+        {"Code": "US", "Name": "United States", "Population": 331_000_000, "RowVer": b"\x04"},
+        {"Code": "CH", "Name": "Switzerland", "Population": 8_700_000, "RowVer": b"\x05"},
+    ],
+    "AuditLog": [
+        {"Id": 1},
+        {"Id": 2},
+    ],
+    "Order": [
+        {"Id": 1, "CountryCode": "DE"},
+        {"Id": 2, "CountryCode": "FR"},
+    ],
+    "v_Customer": [{"Code": "DE"}, {"Code": "FR"}],
+}
+
+
 @pytest.fixture
 def provider() -> FakeProvider:
-    """A fake provider serving the sample catalog."""
-    return FakeProvider(SAMPLE_TABLES)
+    """A fake provider serving the sample catalog and its rows."""
+    return FakeProvider(SAMPLE_TABLES, SAMPLE_ROWS)
+
+
+def make_provider(*, conflict_on: int | None = None, fail_on: int | None = None) -> FakeProvider:
+    """A fake provider scripted to fail or to report a concurrency conflict.
+
+    ``app_factory`` takes a ``provider`` override so a test can exercise the failure
+    paths (rollback, FR-7.8) without a real database.
+    """
+    return FakeProvider(SAMPLE_TABLES, SAMPLE_ROWS, fail_on=fail_on, conflict_on=conflict_on)
 
 
 def active_screen[S](app: App[None], screen_type: type[S]) -> S:
@@ -118,20 +222,28 @@ def active_screen[S](app: App[None], screen_type: type[S]) -> S:
 
 
 #: Builds a fully injected :class:`SwissKnifeApp` (extra kwargs override the defaults).
+#: ``provider=`` swaps the fake provider, which is how a test drives a rollback or a
+#: concurrency conflict without a database.
 AppFactory = Callable[..., SwissKnifeApp]
 
 
 @pytest.fixture
 def app_factory(tmp_path: Path, provider: FakeProvider) -> AppFactory:
-    """Build a fully injected app; returns a callable taking extra constructor kwargs."""
-    profiles = ProfileStore(tmp_path / "profiles.toml")
+    """Build a fully injected app; returns a callable taking extra constructor kwargs.
 
-    def build(**kwargs: object) -> SwissKnifeApp:
+    A test can pass ``provider=make_provider(conflict_on=0)`` to drive the failure paths
+    (Apply rollback, a concurrency conflict) without a real database.
+    """
+    profiles = ProfileStore(tmp_path / "profiles.toml")
+    fixture_provider = provider
+
+    def build(*, provider: FakeProvider | None = None, **kwargs: object) -> SwissKnifeApp:
+        active = provider if provider is not None else fixture_provider
         options: dict[str, object] = {
             "profiles": profiles,
             "secrets": EphemeralSecretStore(),
             "settings": SettingsStore(tmp_path / "settings.toml"),
-            "provider_factory": lambda name: provider,
+            "provider_factory": lambda name: active,
         }
         options.update(kwargs)
         return SwissKnifeApp(**options)  # type: ignore[arg-type]
@@ -148,10 +260,12 @@ def seeded_profiles(tmp_path: Path) -> Iterator[ProfileStore]:
 
 
 __all__ = [
+    "SAMPLE_ROWS",
     "SAMPLE_TABLES",
     "AppFactory",
     "ProfileStore",
     "active_screen",
     "demo_profile",
+    "make_provider",
     "no_database_profile",
 ]

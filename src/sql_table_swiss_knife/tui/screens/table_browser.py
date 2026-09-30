@@ -56,7 +56,9 @@ class TableBrowserScreen(AppScreen):
         Binding("enter", "open_table", "Open", show=True),
         Binding("escape", "go_back", "Back", show=True),
         Binding("r", "reload", "Reload", show=True),
-        Binding("f5", "toggle_schema", "Collapse schemas", show=True),
+        # F6, not F5: DESIGN §9.2 gives F5 to the session-wide read-only toggle (S-9),
+        # and a safety switch must never be shadowed by a screen-local binding.
+        Binding("f6", "toggle_schema", "Collapse schemas", show=True),
     ]
 
     def __init__(self, **kwargs: object) -> None:
@@ -206,7 +208,7 @@ class TableBrowserScreen(AppScreen):
         return (
             KeyHint("enter", "open table"),
             searching,
-            KeyHint("f5", "collapse schemas"),
+            KeyHint("f6", "collapse schemas"),
             KeyHint("r", "reload"),
             KeyHint("esc", "back to connections"),
         )

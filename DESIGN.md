@@ -1,6 +1,6 @@
 # DESIGN — sql-table-swiss-knife
 
-Status: **v0.2 — M1 + M2 implemented** (see [PROGRESS.md](PROGRESS.md) for live status)
+Status: **v0.4 — M1–M4 implemented** (see [PROGRESS.md](PROGRESS.md) for live status)
 Companion document: [SPEC.md](SPEC.md) (requirements, milestones, open questions).
 
 > **Tooling: this project uses `uv`.** Every command below is a `uv` command — do not
@@ -823,9 +823,12 @@ session (useful when demoing against production).
 - DESIGN.md (this file): layers, folder layout, domain model, provider + dialect Protocols,
   SQL generation, change tracking/Apply algorithm, security design, TUI design, verified tech
   choices with the pyodbc/mssql-python wheel report, testing, errors/logging, config.
-- **Status: M1 and M2 are implemented.** Milestone-by-milestone status lives in
+- **Status: M1–M4 are implemented** (M4 = the read-only grid and the schema inspector:
+  `services/data.py` for paging, `services/inspector.py` for the warnings/badges/detail
+  model, `services/validation.py` for live cell validation, `tui/widgets/data_grid.py` and
+  `tui/widgets/inspector.py` for the split view). Milestone-by-milestone status lives in
   [PROGRESS.md](PROGRESS.md), which is updated and committed at the end of each milestone
-  (see §15). Next up: M3 (connection manager & table picker).
+  (see §15). Next up: M5 (edit & stage changes).
 
 ---
 

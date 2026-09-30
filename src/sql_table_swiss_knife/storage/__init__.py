@@ -4,7 +4,8 @@ All files live in the platformdirs config directory and honour the
 ``SWISSKNIFE_CONFIG_DIR`` override (DESIGN §8.3).
 """
 
-from .paths import config_dir, profiles_path, settings_path
+from .audit import AuditEntry, AuditLog, AuditLogError, assert_no_credentials
+from .paths import audit_log_path, config_dir, profiles_path, settings_path
 from .profiles import ProfileError, ProfileStore
 from .secrets import (
     EphemeralSecretStore,
@@ -18,6 +19,9 @@ from .secrets import (
 from .settings import Settings, SettingsError, SettingsStore
 
 __all__ = [
+    "AuditEntry",
+    "AuditLog",
+    "AuditLogError",
     "EphemeralSecretStore",
     "KeyringSecretStore",
     "ProfileError",
@@ -27,6 +31,8 @@ __all__ = [
     "Settings",
     "SettingsError",
     "SettingsStore",
+    "assert_no_credentials",
+    "audit_log_path",
     "config_dir",
     "default_secret_store",
     "profiles_path",

@@ -36,6 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help=(
+            "refuse every write for this session and lock the read-only toggle: "
+            "no staging, no Apply, whatever the profile says (S-9)"
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     inspect = subparsers.add_parser(
@@ -247,6 +255,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception as exc:  # user-facing CLI error, no traceback
             print(f"error: {exc}", file=sys.stderr)
             return 1
-    app = SwissKnifeApp()
+    app = SwissKnifeApp(read_only=args.read_only)
     app.run()
     return 0

@@ -7,16 +7,30 @@ own. Themes are registered here, switched at runtime with ``ctrl+t`` and persist
 """
 
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.command import Provider
 from textual.system_commands import SystemCommandsProvider
 
-from ..services import CatalogService, ConnectionService
+from ..infra.clipboard import ClipboardService, default_backends
+from ..services import (
+    CatalogService,
+    ConnectionService,
+    DataService,
+    LookupService,
+    SafetyPolicy,
+)
 from ..services.connection import ProviderFactory
-from ..storage import ProfileStore, SecretStore, Settings, SettingsError, SettingsStore
+from ..storage import (
+    AuditLog,
+    ProfileStore,
+    SecretStore,
+    Settings,
+    SettingsError,
+    SettingsStore,
+)
 from .commands import ActionProvider
 from .screens import ConnectionsScreen
 from .theme import SEMANTIC_ROLES, THEMES, load_theme, next_theme, register_themes
@@ -27,16 +41,35 @@ __all__ = ["AppServices", "SwissKnifeApp"]
 class AppServices:
     """The service bundle screens read as ``app.services`` (DESIGN §2).
 
-    A tiny container rather than passing two arguments around: screens touch
-    ``app.services.connection`` / ``.catalog`` and nothing else, which keeps the
-    dependency direction ``tui → services``.
+        A tiny container rather than passing four arguments around: screens touch
+        ``app.services.connection`` / ``.catalog`` / ``.data`` / ``.lookup`` and nothing else,
+        which keeps the dependency direction ``tui → services``.
+
+        ``lookup`` is stateless and cheap, so it is created once here rather than per screen;
+        ``clipboard`` is built on demand from the app itself (it needs the terminal), and
+    ``changes`` is *not* in this bundle: staging belongs to one table, so each
+        ``TableEditorScreen`` owns its own :class:`~services.changes.ChangeService`.
+
+        ``safety`` is the session's write posture (M8). It lives here rather than on a
+        screen because read-only is a property of the *session*, not of a table: it
+        survives navigating between tables and is toggled from anywhere.
     """
 
-    __slots__ = ("catalog", "connection")
+    __slots__ = ("catalog", "connection", "data", "lookup", "safety")
 
-    def __init__(self, connection: ConnectionService, catalog: CatalogService) -> None:
+    def __init__(
+        self,
+        connection: ConnectionService,
+        catalog: CatalogService,
+        data: DataService,
+        lookup: LookupService,
+        safety: SafetyPolicy,
+    ) -> None:
         self.connection = connection
         self.catalog = catalog
+        self.data = data
+        self.lookup = lookup
+        self.safety = safety
 
 
 class SwissKnifeApp(App[None]):
@@ -63,6 +96,9 @@ class SwissKnifeApp(App[None]):
         Binding("ctrl+t", "next_theme", "Theme", priority=True, show=False),
         Binding("f1,question_mark", "show_help", "Help", priority=True, show=False),
         Binding("ctrl+h", "go_home", "Connections", priority=True, show=False),
+        # M8 safety: the read-only posture is one keystroke away from anywhere,
+        # and always visible in the header badge (S-9).
+        Binding("f5", "toggle_read_only", "Read-only", priority=True, show=False),
     ]
 
     def __init__(
@@ -73,6 +109,8 @@ class SwissKnifeApp(App[None]):
         settings: SettingsStore | None = None,
         provider_factory: ProviderFactory | None = None,
         initial_theme: str | None = None,
+        read_only: bool = False,
+        audit_log: AuditLog | None = None,
     ) -> None:
         """Create the app, wiring up services.
 
@@ -82,26 +120,75 @@ class SwissKnifeApp(App[None]):
             settings: Settings store override (tests).
             provider_factory: Provider resolver override (tests use a fake).
             initial_theme: Force a theme instead of reading ``settings.toml``.
+            read_only: ``--read-only``: the session refuses writes and the toggle is
+                locked, so the posture is the one the process was started in.
+            audit_log: Apply audit log override (tests write to a temp file).
         """
         super().__init__()
         self.settings_store = settings if settings is not None else SettingsStore()
         self._settings: Settings = self._load_settings()
         self._settings_error: str | None = None
+        self._read_only_requested = read_only
+        self.audit_log = audit_log if audit_log is not None else AuditLog()
+        # The posture a profile opens with is resolved on connect (it depends on the
+        # profile's environment); this is the starting point until then.
+        self.safety = SafetyPolicy(
+            forced_read_only=read_only,
+            read_only=read_only,
+            delete_confirm_threshold=self._settings.delete_confirm_threshold,
+        )
         self.connection = ConnectionService(
             profiles=profiles,
             secrets=secrets,
             **({"provider_factory": provider_factory} if provider_factory else {}),
         )
         self.catalog = CatalogService(self.connection)
+        self.data = DataService(self.connection)
         self._forced_theme = initial_theme
         self._quitting = False
 
     # -- state --------------------------------------------------------------
 
     @property
+    def settings(self) -> Settings:
+        """The live user preferences (re-read after every persisted change)."""
+        return self._settings
+
+    def persist_settings(self, **changes: Any) -> None:
+        """Save preference changes and keep the in-memory copy in step.
+
+        Screens change preferences (the copy format, for one), and a screen that only wrote
+        the file would leave the app believing the old value until a restart — the sort of
+        drift the rest of this app is careful to avoid.
+        """
+        try:
+            self._settings = self.settings_store.update(self._settings, **changes)
+        except SettingsError as exc:
+            self.notify(f"setting not persisted: {exc}", title="Settings", severity="warning")
+
+    @property
+    def clipboard_service(self) -> ClipboardService:
+        """The copy/read chain: pyperclip, then platform tools, then OSC 52 (FR-4.3).
+
+        Built per call rather than cached so it always reflects the current settings and
+        always binds Textual's own ``copy_to_clipboard`` for the terminal fallback — which
+        is the mechanism that keeps working over SSH, where the native tools cannot.
+        """
+        return ClipboardService(
+            default_backends(self.copy_to_clipboard),
+            read_fallback=self.settings.clipboard_read_fallback,
+        )
+
+    @property
     def services(self) -> AppServices:
         """The session services, as the screens consume them."""
-        return AppServices(connection=self.connection, catalog=self.catalog)
+        return AppServices(
+            connection=self.connection,
+            catalog=self.catalog,
+            data=self.data,
+            lookup=LookupService(self.connection, self.catalog),
+            safety=self.safety,
+        )
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Fallbacks for the semantic palette (DESIGN §9.4).
@@ -163,6 +250,31 @@ class SwissKnifeApp(App[None]):
     def go_home(self) -> None:
         """Alias used by the command palette."""
         self.action_go_home()
+
+    def action_toggle_read_only(self) -> None:
+        """Flip the session's read-only posture (``f5``, S-9).
+
+        Read-only is the default for production, but it is never a lock: the user can
+        always choose to write, and doing so changes the header badge immediately. The
+        reverse also holds — a writable session can be locked at any moment, which is
+        the point of making this a toggle rather than a per-profile setting only.
+        """
+        read_only = self.safety.toggle_read_only()
+        if self.safety.forced_read_only:
+            self.notify(
+                "this session was started with --read-only; it cannot write",
+                title="Read-only",
+                severity="warning",
+            )
+        elif read_only:
+            self.notify("read-only: staging and Apply are disabled", title="Read-only")
+        else:
+            self.notify(
+                "writes enabled — production Apply still asks for a typed confirmation",
+                title="Read-only",
+                severity="warning",
+            )
+        self._refresh_chrome()
 
     def action_show_help(self) -> None:
         """Show the key-binding reference overlay (NFR-6)."""

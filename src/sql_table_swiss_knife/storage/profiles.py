@@ -11,7 +11,12 @@ from typing import Any
 
 import tomli_w
 
-from ..domain.connection import AuthMode, ConnectionOptions, ConnectionProfile
+from ..domain.connection import (
+    AuthMode,
+    ConnectionOptions,
+    ConnectionProfile,
+    Environment,
+)
 from ..infra.errors import AppError
 from .paths import profiles_path
 
@@ -24,7 +29,19 @@ FORBIDDEN_KEYS = frozenset({"password", "pwd", "passwd", "secret"})
 _TOP_LEVEL_KEYS = frozenset({"profile"})
 
 _PROFILE_KEYS = frozenset(
-    {"name", "provider", "host", "port", "database", "auth", "username", "secret_ref", "options"}
+    {
+        "name",
+        "provider",
+        "host",
+        "port",
+        "database",
+        "auth",
+        "username",
+        "secret_ref",
+        "environment",
+        "read_only",
+        "options",
+    }
 )
 
 _OPTION_KEYS = frozenset(
@@ -65,6 +82,13 @@ def _profile_to_table(profile: ConnectionProfile) -> dict[str, Any]:
         table["username"] = profile.username
     if profile.secret_ref is not None:
         table["secret_ref"] = profile.secret_ref
+    # ``environment`` is only written when it is not the default, so a file written by
+    # this version stays as small as the previous ones; ``read_only`` is written
+    # whenever it is set, because ``false`` is a deliberate opt-out and must survive.
+    if profile.environment is not Environment.DEVELOPMENT:
+        table["environment"] = profile.environment.value
+    if profile.read_only is not None:
+        table["read_only"] = profile.read_only
     table["options"] = _options_to_table(profile.options)
     return table
 
@@ -114,6 +138,16 @@ def _profile_from_table(table: Any, *, index: int) -> ConnectionProfile:
     database = table.get("database")
     if database is not None and not isinstance(database, str):
         raise ProfileError(f"{context}: 'database' must be a string")
+
+    environment_raw = table.get("environment", Environment.DEVELOPMENT.value)
+    try:
+        environment = Environment.parse(str(environment_raw))
+    except ValueError as exc:
+        raise ProfileError(f"{context}: {exc}") from exc
+
+    read_only = table.get("read_only")
+    if read_only is not None and not isinstance(read_only, bool):
+        raise ProfileError(f"{context}: 'read_only' must be true or false")
     username = table.get("username")
     if username is not None and not isinstance(username, str):
         raise ProfileError(f"{context}: 'username' must be a string")
@@ -138,6 +172,8 @@ def _profile_from_table(table: Any, *, index: int) -> ConnectionProfile:
             username=username,
             secret_ref=secret_ref,
             options=options,
+            environment=environment,
+            read_only=read_only,
         )
     except ValueError as exc:
         raise ProfileError(f"{context}: {exc}") from exc

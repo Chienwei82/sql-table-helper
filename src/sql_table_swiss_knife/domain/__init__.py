@@ -15,8 +15,22 @@ from .catalog import (
     Trigger,
     UniqueConstraint,
 )
-from .changes import ChangeKind, PendingChange
-from .connection import AuthMode, ConnectionOptions, ConnectionProfile, ConnectionResult
+from .changes import (
+    ChangeKind,
+    ChangeSet,
+    PendingChange,
+    describe_changes,
+    is_new_row,
+    new_row_key,
+    row_label,
+)
+from .connection import (
+    AuthMode,
+    ConnectionOptions,
+    ConnectionProfile,
+    ConnectionResult,
+    Environment,
+)
 from .identifiers import TableRef, validate_identifier
 from .rows import (
     FetchSpec,
@@ -32,12 +46,14 @@ from .rows import (
 __all__ = [
     "AuthMode",
     "ChangeKind",
+    "ChangeSet",
     "CheckConstraint",
     "Column",
     "ConnectionOptions",
     "ConnectionProfile",
     "ConnectionResult",
     "Database",
+    "Environment",
     "FetchSpec",
     "FilterOp",
     "ForeignKey",
@@ -57,6 +73,10 @@ __all__ = [
     "TableSummary",
     "Trigger",
     "UniqueConstraint",
+    "describe_changes",
+    "is_new_row",
     "make_row_key",
+    "new_row_key",
+    "row_label",
     "validate_identifier",
 ]

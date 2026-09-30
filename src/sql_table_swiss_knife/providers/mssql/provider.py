@@ -5,17 +5,27 @@ One connection per active session, always driven from a single dedicated worker 
 sees ``pyodbc.Error`` (DESIGN §5.2).
 """
 
+import time
 from collections.abc import Sequence
+from contextlib import suppress
+from dataclasses import replace
 from typing import Any
 
 from ...domain.catalog import Database, Table, TableSummary
-from ...domain.changes import PendingChange
+from ...domain.changes import ChangeKind, PendingChange, row_label
 from ...domain.connection import ConnectionProfile
 from ...domain.identifiers import validate_identifier
-from ...domain.rows import FetchSpec, Row, RowPage
-from ..base import ActiveConnection, ExecuteResult, ProviderCapabilities
-from ..dialect import SqlDialect
-from ..errors import MetadataError
+from ...domain.rows import FetchSpec, Row, RowKey, RowPage, SortKey
+from ..base import (
+    ActiveConnection,
+    ExecuteResult,
+    ProviderCapabilities,
+    RowConflict,
+    StatementResult,
+)
+from ..dialect import ApplyOptions, SqlDialect
+from ..errors import MetadataError, QueryError
+from ..sqlgen import build_select, build_statements, sort_for_apply
 from . import metadata as md
 from .connection import (
     SingleThreadRunner,
@@ -24,8 +34,43 @@ from .connection import (
     import_pyodbc,
 )
 from .dialect import TSqlDialect
+from .errors import sanitize_driver_message
 
-__all__ = ["MssqlConnection", "MssqlProvider"]
+__all__ = [
+    "CONFLICT_REASON",
+    "MssqlConnection",
+    "MssqlProvider",
+]
+
+#: Wording for "the row I fetched is no longer what the database holds" (FR-7.8).
+CONFLICT_REASON = "row changed by someone else (0 rows affected)"
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
+def _describe(change: PendingChange) -> str:
+    """Which row a failure belongs to, for the error message."""
+    return f"{change.kind.value} of {row_label(change.key)}"
+
+
+def _message(exc: Exception) -> str:
+    """User-safe message for a driver exception raised mid-Apply."""
+    if isinstance(exc, (QueryError, MetadataError)):
+        return str(exc)
+    return sanitize_driver_message(str(exc))
+
+
+def _inserted_key(table: Table, returned: dict[str, Any]) -> RowKey:
+    """The identity of a row the server just inserted, from the OUTPUT clause."""
+    columns = table.primary_key.columns if table.primary_key is not None else table.identity_columns
+    if not columns or any(name not in returned for name in columns):
+        raise QueryError(
+            f"INSERT into {table.ref} did not return its key columns "
+            f"({', '.join(columns) or 'none'}) — re-fetch the table to see the new rows"
+        )
+    return tuple((name, returned[name]) for name in columns)
 
 
 class MssqlConnection:
@@ -69,6 +114,37 @@ class MssqlConnection:
         """Async wrapper around :meth:`fetch` running on the dedicated worker thread."""
         rows: list[dict[str, Any]] = await self.runner.run(self.fetch, sql, params)
         return rows
+
+    async def aexecute(
+        self, sql: str, params: Sequence[object] | None = None
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Run a DML statement; returns ``(rowcount, returned rows)``.
+
+        Separate from :meth:`afetch` because DML needs the driver's rowcount, and because
+        an INSERT with an OUTPUT clause returns rows the caller must read before the
+        cursor is closed. The rowcount is read on the worker thread that executed the
+        statement, so it cannot be attributed to the wrong call.
+        """
+        if self.closed:
+            raise MetadataError("connection is closed")
+        result: tuple[int, list[dict[str, Any]]] = await self.runner.run(self._execute, sql, params)
+        return result
+
+    def _execute(
+        self, sql: str, params: Sequence[object] | None
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Worker-thread body of :meth:`aexecute`."""
+        cursor = self._raw.cursor()
+        try:
+            cursor.execute(sql, tuple(params) if params is not None else None)
+            rowcount = cursor.rowcount if cursor.rowcount is not None else 0
+            description = cursor.description or ()
+            if not description:
+                return rowcount, []
+            columns = [str(item[0]) for item in description]
+            return rowcount, [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
 
     def close(self) -> None:
         if self.closed:
@@ -248,27 +324,34 @@ class MssqlProvider:
     # -- rows --------------------------------------------------------------
 
     async def fetch_rows(self, conn: ActiveConnection, table: Table, spec: FetchSpec) -> RowPage:
-        """Fetch one page of rows ordered by the table's identity columns.
+        """Fetch one page of rows, honouring the spec's sort, filters and keyset cursor.
+
+        The whole statement is built by :func:`providers.sqlgen.build_select`, so the
+        grid's paging can never diverge from the preview. ``limit + 1`` rows are read and
+        the extra one dropped, which is how ``has_more`` is decided without a COUNT(*)
+        (S-8: the full table is never loaded).
 
         Tables without any usable identity (no PK, no single-column UNIQUE) have no
-        deterministic order — they are read-only anyway (OQ-5/S-4), so a stable
+        deterministic order — they are read-only anyway (OQ-5/S-4) — so a stable
         ``(SELECT NULL)`` order is used and ``has_more`` may over-report by one row.
         """
-        identity = table.identity_columns
-        orders = [(column, False) for column in identity]
-        columns = [column.name for column in table.columns]
-        if orders:
-            sql = self._dialect.select_rows_sql(
-                table.schema, table.name, columns, [], orders, spec.limit + 1, spec.offset
-            )
+        handle = self._handle(conn)
+        if table.identity_columns:
+            # Over-fetch by one row: its existence is how ``has_more`` is decided
+            # without a COUNT(*), which would scan the table on every page.
+            over_fetched = replace(self._ordered(table, spec), limit=spec.limit + 1)
+            select = build_select(self._dialect, table, over_fetched)
+            rows = await handle.afetch(select.sql, select.params)
         else:
             qualified = self._dialect.quote_qualified(table.schema, table.name)
-            column_sql = ", ".join(self._dialect.quote_ident(name) for name in columns)
+            column_sql = ", ".join(
+                self._dialect.quote_ident(column.name) for column in table.columns
+            )
             sql = (
                 f"SELECT {column_sql} FROM {qualified} ORDER BY (SELECT NULL) "
                 f"OFFSET {spec.offset} ROWS FETCH NEXT {spec.limit + 1} ROWS ONLY"
             )
-        rows = await self._handle(conn).afetch(sql)
+            rows = await handle.afetch(sql)
         page = rows[: spec.limit]
         return RowPage(
             rows=tuple(Row(dict(row)) for row in page),
@@ -277,9 +360,119 @@ class MssqlProvider:
             has_more=len(rows) > spec.limit,
         )
 
+    @staticmethod
+    def _ordered(table: Table, spec: FetchSpec) -> FetchSpec:
+        """Guarantee a deterministic order even when the caller sends none.
+
+        ``OFFSET/FETCH`` without ``ORDER BY`` has no defined row order, so paging would
+        skip and repeat rows. The identity columns are the natural default (and the same
+        order the data service asks for); a caller-supplied sort always wins.
+        """
+        if spec.sort or not table.identity_columns:
+            return spec
+        return replace(spec, sort=tuple(SortKey(column=name) for name in table.identity_columns))
+
     async def execute_changes(
-        self, conn: ActiveConnection, table: Table, changes: Sequence[PendingChange]
+        self,
+        conn: ActiveConnection,
+        table: Table,
+        changes: Sequence[PendingChange],
+        options: ApplyOptions | None = None,
     ) -> ExecuteResult:
-        """Not in M2: the transactional Apply pipeline lands in M6."""
-        del conn, table, changes
-        raise NotImplementedError("the apply pipeline lands in Milestone 6")
+        """Apply staged changes inside one transaction, rolling back on any failure.
+
+        The pipeline (DESIGN §7.2):
+
+        1. order the changes DELETE → UPDATE → INSERT and build the statements once;
+        2. ``BEGIN TRANSACTION``;
+        3. run each statement with its parameters, collecting per-statement results;
+        4. an UPDATE/DELETE affecting 0 rows is a **concurrency conflict**, not a
+           statement error: it is recorded and the transaction is rolled back, so no
+           partial work survives (FR-7.8);
+        5. any driver error → ``ROLLBACK`` and an :class:`ExecuteResult` pointing at the
+           failing statement with a sanitized message (FR-7.6);
+        6. otherwise ``COMMIT`` and report the generated identity keys.
+
+        ``IDENTITY_INSERT`` is toggled around the statements when the caller explicitly
+        opted in, and always turned back off — leaving it on would block every other
+        session's inserts on the table.
+        """
+        settings = options if options is not None else ApplyOptions()
+        handle = self._handle(conn)
+        if not table.updatable:
+            raise QueryError(f"{table.ref} has no usable row identity — its rows are read-only")
+        started = time.perf_counter()
+        ordered = sort_for_apply(changes)
+        statements = build_statements(self._dialect, table, ordered, options=settings)
+        results: list[StatementResult] = []
+        conflicts: list[RowConflict] = []
+        inserted_keys: list[RowKey] = []
+        identity_on = settings.identity_insert and any(
+            statement.kind is ChangeKind.INSERT for statement in statements
+        )
+        await handle.afetch(self._dialect.begin_transaction())
+        try:
+            if identity_on:
+                await handle.afetch(
+                    self._dialect.identity_insert_sql(table.schema, table.name, enabled=True)
+                )
+            for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
+                rowcount, returned = await handle.aexecute(
+                    statement.sql_parametrized, statement.param_values
+                )
+                if rowcount == 0 and change.kind in (ChangeKind.UPDATE, ChangeKind.DELETE):
+                    conflicts.append(RowConflict(change, statement, CONFLICT_REASON))
+                    results.append(StatementResult(change, statement, 0, False, CONFLICT_REASON))
+                    return await self._rollback(
+                        handle,
+                        results,
+                        conflicts,
+                        index,
+                        started,
+                        f"{CONFLICT_REASON} ({_describe(change)}) — refresh the row and retry",
+                    )
+                if returned and statement.kind is ChangeKind.INSERT:
+                    inserted_keys.append(_inserted_key(table, returned[0]))
+                results.append(StatementResult(change, statement, rowcount, True, None))
+            if identity_on:
+                await handle.afetch(
+                    self._dialect.identity_insert_sql(table.schema, table.name, enabled=False)
+                )
+        except Exception as exc:
+            if identity_on:
+                # Best effort: leaving IDENTITY_INSERT on would be worse than the error.
+                with suppress(Exception):
+                    await handle.afetch(
+                        self._dialect.identity_insert_sql(table.schema, table.name, enabled=False)
+                    )
+            return await self._rollback(
+                handle, results, conflicts, len(results), started, _message(exc)
+            )
+        await handle.afetch(self._dialect.commit_transaction())
+        return ExecuteResult(
+            committed=True,
+            results=tuple(results),
+            duration_ms=_elapsed_ms(started),
+            inserted_keys=tuple(inserted_keys),
+        )
+
+    async def _rollback(
+        self,
+        handle: MssqlConnection,
+        results: list[StatementResult],
+        conflicts: list[RowConflict],
+        failed_index: int,
+        started: float,
+        error: str,
+    ) -> ExecuteResult:
+        """Roll the transaction back and build the failure result (FR-7.6)."""
+        with suppress(Exception):
+            await handle.afetch(self._dialect.rollback_transaction())
+        return ExecuteResult(
+            committed=False,
+            results=tuple(results),
+            duration_ms=_elapsed_ms(started),
+            failed_index=failed_index,
+            error=error,
+            conflicts=tuple(conflicts),
+        )

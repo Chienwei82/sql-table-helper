@@ -7,7 +7,48 @@ from typing import Protocol, runtime_checkable
 from ..domain.changes import ChangeKind
 from ..domain.rows import FilterOp, RowKey
 
-__all__ = ["SqlDialect", "SqlParam", "SqlStatement"]
+__all__ = [
+    "ApplyOptions",
+    "Condition",
+    "SqlDialect",
+    "SqlParam",
+    "SqlScript",
+    "SqlStatement",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Condition:
+    """One WHERE element: a column, its rendered value, and whether it is NULL.
+
+    ``is_null`` exists because ``WHERE [col] = NULL`` is never true in SQL: a NULL
+    original value has to be compared with ``IS NULL`` for the optimistic-concurrency
+    guards to be correct.
+    """
+
+    column: str
+    rendered: str
+    is_null: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyOptions:
+    """Knobs for statement generation and execution (DESIGN §6, FR-7.8).
+
+    * ``identity_insert`` — allow explicit values for identity columns. This requires
+      ``SET IDENTITY_INSERT … ON`` around the statements and is opt-in behind a
+      warning, because writing explicit identity values desynchronizes the identity
+      counter from the rows actually present.
+    * ``compare_original_values`` — for tables *without* a rowversion column, add the
+      original value of every unchanged column to the WHERE clause, so a concurrent
+      modification by someone else is detected as 0 rows affected.
+    * ``schema_locking`` — emit ``SET DEADLOCK_PRIORITY LOW`` / a holdlock hint so a
+      long Apply does not escalate into a deadlock victim.
+    """
+
+    identity_insert: bool = False
+    compare_original_values: bool = False
+    schema_locking: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +58,25 @@ class SqlParam:
     name: str  # e.g. "@p0"
     value: object
     column: str
+
+
+@dataclass(frozen=True, slots=True)
+class SqlScript:
+    """A complete, copy-ready script wrapping one or more statements (FR-5.3).
+
+    ``body`` is the literal form of every statement in apply order, already terminated.
+    ``identity_insert`` records that the script needs ``SET IDENTITY_INSERT … ON`` around
+    the statements, which the dialect decides — it is the only thing that knows whether the
+    DBMS has such a concept at all.
+    """
+
+    body: tuple[str, ...]
+    identity_insert: tuple[str, str] | None = None
+
+    @property
+    def statements(self) -> tuple[str, ...]:
+        """The statements without the transaction wrapper."""
+        return self.body
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +121,53 @@ class SqlDialect(Protocol):
 
     def placeholder(self, index: int) -> str: ...
 
-    def literal(self, value: object) -> str: ...
+    def literal(self, value: object) -> str:
+        """Render a *value* as a self-contained literal — display/copy only (FR-5.2).
+
+        This is the single seam through which every value reaches SQL text, so escaping
+        lives here and nowhere else (S-6: user text never becomes SQL text).
+        """
+        ...
+
+    def select_by_key_sql(
+        self,
+        schema: str,
+        table: str,
+        columns: Sequence[str],
+        conditions: Sequence[Condition],
+    ) -> str:
+        """SELECT of the rows matching ``conditions`` (the "generate SELECT" action)."""
+        ...
+
+    def insert_rows_sql(
+        self,
+        schema: str,
+        table: str,
+        columns: Sequence[str],
+        rows: Sequence[Sequence[str]],
+    ) -> str:
+        """One multi-row INSERT; empty ``rows`` yields an empty string."""
+        ...
+
+    def merge_sql(
+        self,
+        schema: str,
+        table: str,
+        key_columns: Sequence[str],
+        columns: Sequence[str],
+        rows: Sequence[Sequence[str]],
+    ) -> str:
+        """Upsert ``rows`` matched on ``key_columns`` (the "generate MERGE" action)."""
+        ...
+
+    def script_sql(self, script: SqlScript) -> str:
+        """Wrap statements in the dialect's transaction/error-handling envelope (FR-5.3).
+
+        The contract every implementation must honour: a statement that fails leaves
+        **nothing** applied — a transaction that rolls back, or a dialect whose scripts are
+        explicitly not all-or-nothing (documented by the implementation).
+        """
+        ...
 
     def insert_sql(
         self,
@@ -77,15 +183,19 @@ class SqlDialect(Protocol):
         schema: str,
         table: str,
         assignments: Sequence[tuple[str, str]],
-        conditions: Sequence[tuple[str, str]],
+        conditions: Sequence[Condition],
     ) -> str: ...
 
     def delete_sql(
         self,
         schema: str,
         table: str,
-        conditions: Sequence[tuple[str, str]],
+        conditions: Sequence[Condition],
     ) -> str: ...
+
+    def identity_insert_sql(self, schema: str, table: str, *, enabled: bool) -> str:
+        """``SET IDENTITY_INSERT [s].[t] ON|OFF`` (empty string for other dialects)."""
+        ...
 
     def predicate_sql(self, column: str, op: FilterOp, placeholder: str | None = None) -> str: ...
 
@@ -98,7 +208,14 @@ class SqlDialect(Protocol):
         orders: Sequence[tuple[str, bool]],
         limit: int,
         offset: int,
-    ) -> str: ...
+        after_key: Sequence[tuple[str, str]] = (),
+    ) -> str:
+        """Paged SELECT; ``after_key`` enables keyset paging when it is non-empty."""
+        ...
+
+    def keyset_predicate_sql(self, key_columns: Sequence[str], placeholders: Sequence[str]) -> str:
+        """A lexicographic ``>`` comparison over the key columns, for keyset paging."""
+        ...
 
     def begin_transaction(self) -> str: ...
 

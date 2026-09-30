@@ -15,7 +15,7 @@ from textual.containers import Horizontal
 from textual.widgets import Button, DataTable, Static
 
 from ...domain.connection import ConnectionProfile, ConnectionResult
-from ...services import SessionInfo
+from ...services import SafetyPolicy, SessionInfo
 from ..widgets import KeyHint
 from .base import AppScreen
 from .confirm import ConfirmScreen
@@ -105,12 +105,16 @@ class ConnectionsScreen(AppScreen):
     def _render_profiles(self) -> None:
         table = self.query_one("#profile-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("Profile", "Provider", "Server", "Database", "Auth", "State")
+        table.add_columns("Profile", "Env", "Provider", "Server", "Database", "Auth", "State")
         active = self.connection.session
         for index, profile in enumerate(self._profiles):
             state = "connected" if active and active.profile_name == profile.name else ""
             table.add_row(
                 profile.name,
+                # The environment and the posture it implies are visible *before*
+                # connecting: picking the wrong profile is exactly the mistake the
+                # badge is there to prevent, and this is where that choice is made.
+                _environment_label(profile),
                 profile.provider,
                 f"{profile.host}:{profile.port}",
                 profile.database or "(pick on connect)",
@@ -239,11 +243,29 @@ class ConnectionsScreen(AppScreen):
         self._connect_and_open(updated)
 
     def _connect_and_open(self, profile: ConnectionProfile) -> None:
+        self._apply_safety_for(profile)
         self.run_task(
             lambda: self.connection.connect(profile),
             busy_message=f"connecting to {profile.name}…",
             on_result=self._on_connected,
         )
+
+    def _apply_safety_for(self, profile: ConnectionProfile) -> None:
+        """Set the session write posture from the profile being connected (M8, S-9).
+
+        Done *before* the user reaches a table, so the header badge is already correct
+        on the first screen: the badge must never lag the session by a navigation.
+        """
+        safety = self.services.safety
+        policy = SafetyPolicy.for_profile(
+            profile,
+            forced_read_only=safety.forced_read_only,
+            delete_confirm_threshold=safety.delete_confirm_threshold,
+            allow_keyless_writes=safety.allow_keyless_writes,
+        )
+        safety.read_only = policy.read_only
+        safety.environment = policy.environment
+        return None
 
     def _on_connected(self, _session: SessionInfo) -> None:
         self.status.show_message("connected", level="success")
@@ -360,3 +382,14 @@ class ConnectionsScreen(AppScreen):
         if not 0 <= index < len(self._profiles):
             return None
         return self._profiles[index]
+
+
+def _environment_label(profile: ConnectionProfile) -> str:
+    """``PROD (ro)`` / ``DEV`` for the profile list (M8).
+
+    The ``(ro)`` marker states the posture the profile will open with, so a production
+    profile that has been opted into writing is distinguishable from one that has not —
+    the two look identical in the file, and only one of them is safe to press enter on.
+    """
+    label = profile.environment.badge
+    return f"{label} (ro)" if profile.read_only_effective else label

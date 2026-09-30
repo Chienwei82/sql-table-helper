@@ -2,10 +2,17 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Final
 
 from .identifiers import validate_identifier
 
-__all__ = ["AuthMode", "ConnectionOptions", "ConnectionProfile", "ConnectionResult"]
+__all__ = [
+    "AuthMode",
+    "ConnectionOptions",
+    "ConnectionProfile",
+    "ConnectionResult",
+    "Environment",
+]
 
 
 class AuthMode(Enum):
@@ -13,6 +20,59 @@ class AuthMode(Enum):
 
     SQL = "sql"  # username + password (secret via SecretStore)
     INTEGRATED = "integrated"  # Windows integrated auth; no secret
+
+
+class Environment(Enum):
+    """Which environment a profile points at (M8 safety).
+
+    The environment drives two visible things: the badge in the app header, and
+    whether the profile opens **read-only** by default (:attr:`read_only_by_default`).
+    A production profile that can write by accident is exactly the failure this
+    milestone exists to prevent, so the safe answer is the default one and turning
+    writing on is always an explicit, visible act.
+    """
+
+    DEVELOPMENT = "development"
+    TEST = "test"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+    @property
+    def read_only_by_default(self) -> bool:
+        """True for environments that open read-only unless the profile says otherwise."""
+        return self is Environment.PRODUCTION
+
+    @property
+    def badge(self) -> str:
+        """Short label for the header badge: ``PROD``, ``STG``, ``TEST``, ``DEV``."""
+        return _ENVIRONMENT_BADGE[self]
+
+    @property
+    def requires_typed_confirmation(self) -> bool:
+        """Environments where an Apply must be confirmed by typing a word (FR-7.5)."""
+        return self is Environment.PRODUCTION
+
+    @classmethod
+    def parse(cls, value: str) -> Environment:
+        """Parse a stored/typed environment name.
+
+        Raises:
+            ValueError: when the name is not a known environment.
+        """
+        try:
+            return cls(value.strip().lower())
+        except ValueError as exc:
+            known = ", ".join(item.value for item in cls)
+            raise ValueError(f"unknown environment {value!r}; expected one of {known}") from exc
+
+
+#: Header badge text per environment (M8: colour + word, never colour alone — FR-3.7).
+_ENVIRONMENT_BADGE: Final[dict[Environment, str]] = {
+    Environment.DEVELOPMENT: "DEV",
+    Environment.TEST: "TEST",
+    Environment.STAGING: "STG",
+    Environment.PRODUCTION: "PROD",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +105,22 @@ class ConnectionProfile:
     username: str | None = None
     secret_ref: str | None = None
     options: ConnectionOptions = ConnectionOptions()
+    # -- M8 safety --
+    #: Which environment this profile points at; drives the header badge and the
+    #: default read-only posture (:class:`Environment`).
+    environment: Environment = Environment.DEVELOPMENT
+    #: Per-profile read-only override. ``None`` means "follow the environment"
+    #: (production → read-only). An explicit ``True`` forces read-only anywhere;
+    #: an explicit ``False`` opts a production profile into writing, which the UI
+    #: only ever offers as a deliberate, visible act.
+    read_only: bool | None = None
+
+    @property
+    def read_only_effective(self) -> bool:
+        """The read-only posture this profile opens with (M8 safety, S-9)."""
+        if self.read_only is not None:
+            return self.read_only
+        return self.environment.read_only_by_default
 
     def __post_init__(self) -> None:
         validate_identifier(self.name, kind="profile name")

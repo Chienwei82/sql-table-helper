@@ -88,12 +88,19 @@ class RowFilter:
 
 @dataclass(frozen=True, slots=True)
 class FetchSpec:
-    """Paged, sortable, filterable row request (DESIGN §5, S-8 default limit)."""
+    """Paged, sortable, filterable row request (DESIGN §5, S-8 default limit).
+
+    ``after_key`` turns the request into a *keyset* page: the identity value of the last
+    row of the previous page, so the provider can ask for "everything after this row"
+    instead of counting rows with ``OFFSET``. It is ignored when the requested order does
+    not match the identity columns (see ``providers.sqlgen._keyset_usable``).
+    """
 
     limit: int = 1000
     offset: int = 0
     sort: tuple[SortKey, ...] = ()
     filters: tuple[RowFilter, ...] = ()
+    after_key: RowKey | None = None
 
     def __post_init__(self) -> None:
         if self.limit < 1:

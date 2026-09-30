@@ -219,7 +219,11 @@ async def test_execute_changes_detects_stale_row(
     result = await provider.execute_changes(conn, country_table, [stale])
     assert not result.committed
     assert result.failed_index == 0
-    assert result.error is not None and "optimistic concurrency" in result.error
+    assert result.error is not None and "0 rows affected" in result.error
+    # The conflict is reported per row, so the UI can flag it without aborting.
+    assert result.has_conflicts is True
+    assert result.conflicts[0].row_key == (("Code", "ZZ"),)
+    assert result.conflicts[0].is_update is True
     assert provider.transaction_log == ["BEGIN", "ROLLBACK"]
 
 

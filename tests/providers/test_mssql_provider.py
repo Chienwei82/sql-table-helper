@@ -12,13 +12,18 @@ import pytest
 
 from sql_table_swiss_knife.domain import (
     AuthMode,
+    ChangeKind,
+    Column,
     ConnectionOptions,
     ConnectionProfile,
     FetchSpec,
+    PendingChange,
     ReferentialAction,
+    Table,
     TableKind,
+    TableRef,
 )
-from sql_table_swiss_knife.providers import get_provider
+from sql_table_swiss_knife.providers import ApplyOptions, get_provider
 from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
 
 # -- fake driver --------------------------------------------------------------
@@ -192,18 +197,33 @@ class FakeCursor:
         self.description: list[tuple[str]] = []
         self._rows: list[dict[str, Any]] = []
         self.executed: list[tuple[str, tuple[object, ...]]] = []
+        #: Rowcount reported for DML statements, keyed by a fragment of the SQL.
+        #: A value of 0 simulates a concurrency conflict (FR-7.8).
+        self.rowcounts: dict[str, int] = {}
+        #: Fragments of SQL that must raise, to exercise the rollback path. The value is
+        #: the ``(sqlstate, vendor code, message)`` tuple a pyodbc error carries.
+        self.fails: dict[str, tuple[str, int, str]] = {}
+        self.rowcount = -1
 
     def execute(self, sql: str, params: object = None) -> None:
         bound = tuple(params) if isinstance(params, (list, tuple)) else ()
         self.executed.append((sql, bound))
+        for fragment, failure in self.fails.items():
+            if fragment in sql:
+                sqlstate, vendor, message = failure
+                raise FakePyodbc.Error(sqlstate, vendor, message)
         for fragment, rows in RESPONSES.items():
             if fragment in sql:
                 self._rows = rows
                 self.description = [(key,) for key in rows[0]] if rows else []
+                self.rowcount = len(rows)
                 return
         # unmatched SQL yields no rows, which the provider reports as "not found"
         self._rows = []
         self.description = []
+        self.rowcount = next(
+            (count for fragment, count in self.rowcounts.items() if fragment in sql), 1
+        )
 
     def fetchall(self) -> list[tuple[object, ...]]:
         return [tuple(row.values()) for row in self._rows]
@@ -217,14 +237,23 @@ class FakeRawConnection:
         self.connection_string = connection_string
         self.closed = False
         self.cursors: list[FakeCursor] = []
+        #: Configuration applied to every cursor this connection hands out.
+        self.rowcounts: dict[str, int] = {}
+        self.fails: dict[str, tuple[str, int, str]] = {}
 
     def cursor(self) -> FakeCursor:
         cursor = FakeCursor()
+        cursor.rowcounts = self.rowcounts
+        cursor.fails = self.fails
         self.cursors.append(cursor)
         return cursor
 
     def close(self) -> None:
         self.closed = True
+
+    def statements(self) -> list[str]:
+        """Every SQL string this connection executed, in order."""
+        return [sql for cursor in self.cursors for sql, _ in cursor.executed]
 
 
 class FakePyodbc:
@@ -410,6 +439,17 @@ async def test_get_table_metadata_validates_identifiers(
         await provider.get_table_metadata(conn, "dbo", "way-too-" + "x" * 200)
 
 
+def _update_region() -> PendingChange:
+    """An UPDATE of one Region row, scoped by its PK plus the rowversion guard."""
+    return PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "RowVer": b"\x00\x00"},
+        after={"RegionId": 1, "Name": "Bayern", "RowVer": b"\x00\x00"},
+    )
+
+
 async def test_fetch_rows_orders_by_identity_and_pages(
     fake_pyodbc: FakePyodbc, profile: ConnectionProfile
 ) -> None:
@@ -441,11 +481,129 @@ def test_provider_is_registered_and_satisfies_the_protocol() -> None:
     assert provider.dialect.name == "tsql"
 
 
-async def test_execute_changes_is_not_implemented_yet(
+async def test_execute_changes_runs_in_one_transaction_and_commits(
     fake_pyodbc: FakePyodbc, profile: ConnectionProfile
 ) -> None:
     provider = MssqlProvider()
     conn = await provider.connect(profile, "pw")
     table = await provider.get_table_metadata(conn, "dbo", "Region")
-    with pytest.raises(NotImplementedError, match="Milestone 6"):
-        await provider.execute_changes(conn, table, [])
+    before = len(fake_pyodbc.connections[0].statements())
+
+    result = await provider.execute_changes(conn, table, [_update_region()])
+
+    assert result.committed is True
+    assert result.failed_index is None
+    assert result.conflicts == ()
+    assert result.statement_count == 1
+    statements = fake_pyodbc.connections[0].statements()[before:]
+    assert statements[0] == "BEGIN TRANSACTION"
+    assert statements[1].startswith("UPDATE [dbo].[Region] SET [Name] = @p0")
+    assert statements[-1] == "COMMIT TRANSACTION"
+    assert "ROLLBACK TRANSACTION" not in statements
+
+
+async def test_execute_changes_rolls_everything_back_on_a_driver_error(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    raw = fake_pyodbc.connections[0]
+    raw.fails = {
+        "UPDATE [dbo].[Region]": (
+            "23000",
+            547,
+            "The INSERT statement conflicted with the FOREIGN KEY constraint 'FK_Region_Country'.",
+        )
+    }
+    before = len(raw.statements())
+
+    result = await provider.execute_changes(conn, table, [_update_region()])
+
+    assert result.committed is False
+    assert result.failed_index == 0
+    assert "FK_Region_Country" in (result.error or "")
+    statements = raw.statements()[before:]
+    assert statements[0] == "BEGIN TRANSACTION"
+    assert statements[-1] == "ROLLBACK TRANSACTION"
+    assert "COMMIT TRANSACTION" not in statements
+
+
+async def test_execute_changes_reports_a_zero_rowcount_as_a_conflict(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    raw = fake_pyodbc.connections[0]
+    raw.rowcounts = {"UPDATE [dbo].[Region]": 0}  # someone else changed the row first
+    before = len(raw.statements())
+
+    result = await provider.execute_changes(conn, table, [_update_region()])
+
+    assert result.committed is False
+    assert result.has_conflicts is True
+    conflict = result.conflicts[0]
+    assert conflict.row_key == (("RegionId", 1),)
+    assert "0 rows affected" in conflict.reason
+    assert "0 rows affected" in (result.error or "")
+    assert raw.statements()[before:][-1] == "ROLLBACK TRANSACTION"
+
+
+async def test_execute_changes_brackets_inserts_with_identity_insert(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    change = PendingChange(
+        kind=ChangeKind.INSERT,
+        table=table.ref,
+        after={"RegionId": 99, "Name": "Hesse"},
+    )
+    before = len(fake_pyodbc.connections[0].statements())
+
+    result = await provider.execute_changes(
+        conn, table, [change], ApplyOptions(identity_insert=True)
+    )
+
+    assert result.committed is True
+    statements = fake_pyodbc.connections[0].statements()[before:]
+    assert statements[0] == "BEGIN TRANSACTION"
+    assert statements[1] == "SET IDENTITY_INSERT [dbo].[Region] ON"
+    assert "[RegionId]" in statements[2]  # the identity value is written explicitly
+    assert statements[3] == "SET IDENTITY_INSERT [dbo].[Region] OFF"
+    assert statements[-1] == "COMMIT TRANSACTION"
+
+
+async def test_identity_insert_is_off_by_default_so_identity_values_are_rejected(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    change = PendingChange(
+        kind=ChangeKind.INSERT, table=table.ref, after={"RegionId": 99, "Name": "Hesse"}
+    )
+
+    with pytest.raises(ValueError, match="identity column 'RegionId' cannot be written"):
+        await provider.execute_changes(conn, table, [change])
+    assert not any("IDENTITY_INSERT" in sql for sql in fake_pyodbc.connections[0].statements())
+
+
+async def test_execute_changes_refuses_a_table_without_a_row_identity(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    from sql_table_swiss_knife.providers import QueryError
+
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    keyless = Table(
+        schema="dbo",
+        name="Audit",
+        kind=TableKind.BASE_TABLE,
+        columns=(Column("Event", 1, "nvarchar", 50, None, None, True, None, False),),
+    )
+
+    with pytest.raises(QueryError, match="no usable row identity"):
+        await provider.execute_changes(conn, keyless, [])

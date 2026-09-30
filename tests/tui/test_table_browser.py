@@ -5,7 +5,7 @@ from textual.widgets import Input
 
 from sql_table_swiss_knife.storage import ProfileStore
 from sql_table_swiss_knife.tui.screens import TableBrowserScreen, TableEditorScreen
-from sql_table_swiss_knife.tui.widgets import TableTree
+from sql_table_swiss_knife.tui.widgets import DataGrid, InspectorPanel, TableTree
 from tests.tui.conftest import AUDIT, SAMPLE_TABLES, AppFactory, active_screen
 
 
@@ -132,7 +132,7 @@ async def test_escape_leaves_the_filter_before_the_screen(
 async def test_opening_a_table_pushes_the_editor_screen(
     app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:
-    """FR-2.4: enter on a table row opens it; escape comes back."""
+    """FR-2.4: enter on a table row opens the split view; escape comes back."""
     app = app_factory(profiles=seeded_profiles)
     async with app.run_test(size=(110, 30)) as pilot:
         await pilot.pause()
@@ -142,7 +142,9 @@ async def test_opening_a_table_pushes_the_editor_screen(
         for _ in range(4):
             await pilot.pause()
         assert isinstance(app.screen, TableEditorScreen)
-        assert "dbo.AuditLog" in str(app.screen.query_one("#editor-title").render())
+        # M4: the workspace is a grid plus the inspector panel, not a title line.
+        assert app.screen.query_one("#editor-grid", DataGrid).table == AUDIT
+        assert not app.screen.query_one("#editor-inspector", InspectorPanel).collapsed
 
         await pilot.press("escape")
         await pilot.pause()
@@ -167,7 +169,7 @@ async def test_schema_headers_are_not_openable(
         assert "select a table first" in app.screen.status.message
 
 
-async def test_f5_collapses_and_expands_schema_groups(
+async def test_f6_collapses_and_expands_schema_groups(
     app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:
     app = app_factory(profiles=seeded_profiles)
@@ -176,10 +178,10 @@ async def test_f5_collapses_and_expands_schema_groups(
         await _connected(app, pilot)
         tree = _tree(app)
         assert all(group.is_expanded for group in tree.root.children)
-        await pilot.press("f5")
+        await pilot.press("f6")
         await pilot.pause()
         assert not any(group.is_expanded for group in tree.root.children)
-        await pilot.press("f5")
+        await pilot.press("f6")
         await pilot.pause()
         assert all(group.is_expanded for group in tree.root.children)
 

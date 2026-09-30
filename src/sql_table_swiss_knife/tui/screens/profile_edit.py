@@ -14,7 +14,7 @@ from textual.containers import Grid, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, MaskedInput, Select, Static
 
-from ...domain.connection import AuthMode, ConnectionOptions, ConnectionProfile
+from ...domain.connection import AuthMode, ConnectionOptions, ConnectionProfile, Environment
 from ...services import ConnectionService
 from .base import app_services
 
@@ -22,6 +22,15 @@ __all__ = ["ProfileEditScreen"]
 
 #: Choices offered by the authentication select (FR-1.2).
 AUTH_CHOICES: list[tuple[str, str]] = [(mode.value, mode.value) for mode in AuthMode]
+
+#: Environment choices (M8). Production is listed first: it is the one that changes
+#: the default posture, so it should be the easiest to notice in the list.
+ENVIRONMENT_CHOICES: list[tuple[str, str]] = [
+    (Environment.PRODUCTION.value, "production (read-only by default)"),
+    (Environment.STAGING.value, "staging"),
+    (Environment.TEST.value, "test"),
+    (Environment.DEVELOPMENT.value, "development"),
+]
 
 
 class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
@@ -143,6 +152,23 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
                 placeholder="(empty keeps the stored password)",
                 id="f-password",
             )
+            yield Label("Environment")
+            yield Select(
+                ENVIRONMENT_CHOICES,
+                value=profile.environment.value if profile else Environment.DEVELOPMENT.value,
+                allow_blank=False,
+                id="f-environment",
+            )
+            yield Label("Read-only")
+            yield Checkbox(
+                "Force read-only (production opens read-only by default)",
+                value=(
+                    profile.read_only_effective
+                    if profile
+                    else Environment.DEVELOPMENT.read_only_by_default
+                ),
+                id="f-read-only",
+            )
             yield Label("ODBC driver")
             yield Input(value=options.driver, id="f-driver")
             yield Label("Encrypt")
@@ -231,6 +257,7 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
             driver=self._value("#f-driver") or ConnectionOptions().driver,
             application_intent=self._profile.options.application_intent if self._profile else None,
         )
+        environment = Environment.parse(str(self.query_one("#f-environment", Select).value))
         try:
             return ConnectionProfile(
                 name=name,
@@ -242,6 +269,11 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
                 username=self._value("#f-username") or None,
                 secret_ref=f"{name}@{host}",
                 options=options,
+                environment=environment,
+                # An explicit boolean, not ``None``: the checkbox always states a
+                # posture, and storing it keeps "production opens read-only" a
+                # property of the environment rather than of an old file.
+                read_only=self.query_one("#f-read-only", Checkbox).value,
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc

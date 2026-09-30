@@ -21,9 +21,11 @@ from sql_table_swiss_knife.domain import (
 )
 from sql_table_swiss_knife.providers import (
     ActiveConnection,
+    ApplyOptions,
     ExecuteResult,
     MetadataError,
     ProviderCapabilities,
+    RowConflict,
     SqlDialect,
     SqlStatement,
     StatementResult,
@@ -31,6 +33,9 @@ from sql_table_swiss_knife.providers import (
     sort_for_apply,
 )
 from sql_table_swiss_knife.providers.mssql import TSqlDialect
+
+#: Wording the fake uses for a 0-rowcount concurrency conflict (FR-7.8).
+CONFLICT = "row changed by someone else (0 rows affected)"
 
 
 class FakeConnection:
@@ -48,7 +53,8 @@ class FakeProvider:
 
     Simulates transactional semantics: ``execute_changes`` applies all changes to a
     snapshot and either commits (all rows visible) or rolls back (snapshot restored).
-    ``fail_on`` scripts a failure at a statement index for rollback tests.
+    ``fail_on`` scripts a failure at a statement index for rollback tests;
+    ``conflict_on`` scripts a 0-rowcount concurrency conflict at a statement index.
     """
 
     name = "fake"
@@ -59,6 +65,7 @@ class FakeProvider:
         rows: dict[str, list[dict[str, object]]] | None = None,
         *,
         fail_on: int | None = None,
+        conflict_on: int | None = None,
     ) -> None:
         self._dialect = TSqlDialect()
         self._tables: dict[str, Table] = {f"{table.schema}.{table.name}": table for table in tables}
@@ -68,6 +75,9 @@ class FakeProvider:
         }
         self._connected = False
         self._fail_on = fail_on
+        #: Statement index that must report "0 rows affected" (a concurrency conflict),
+        #: regardless of whether the in-memory row still matches.
+        self._conflict_on = conflict_on
         self.transaction_log: list[str] = []
         self.executed: list[str] = []
 
@@ -142,16 +152,25 @@ class FakeProvider:
         )
 
     async def execute_changes(
-        self, conn: ActiveConnection, table: Table, changes: Sequence[PendingChange]
+        self,
+        conn: ActiveConnection,
+        table: Table,
+        changes: Sequence[PendingChange],
+        options: ApplyOptions | None = None,
     ) -> ExecuteResult:
+        """Apply changes in one transaction, honouring the scripted failure/conflict."""
         self._require(conn)
+        settings = options if options is not None else ApplyOptions()
         started = time.perf_counter()
         state_rows = self._table_rows(table)
         snapshot = [dict(row) for row in state_rows]
         self.transaction_log.append("BEGIN")
         ordered = sort_for_apply(changes)
-        statements = build_statements(self._dialect, table, ordered)
+        statements = build_statements(self._dialect, table, ordered, options=settings)
+        if settings.identity_insert and any(s.kind is ChangeKind.INSERT for s in statements):
+            self.transaction_log.append("IDENTITY_INSERT ON")
         results: list[StatementResult] = []
+        conflicts: list[RowConflict] = []
         for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
             self.executed.append(statement.sql_parametrized)
             if self._fail_on is not None and index == self._fail_on:
@@ -159,18 +178,48 @@ class FakeProvider:
                     state_rows,
                     snapshot,
                     results,
+                    conflicts,
                     change,
                     statement,
                     index,
                     started,
                     "simulated failure",
                 )
+            if self._conflict_on is not None and index == self._conflict_on:
+                # Somebody else changed the row first: 0 rows affected, so roll back.
+                conflicts.append(RowConflict(change, statement, CONFLICT))
+                results.append(StatementResult(change, statement, 0, False, CONFLICT))
+                return self._rollback(
+                    state_rows,
+                    snapshot,
+                    results,
+                    conflicts,
+                    change,
+                    statement,
+                    index,
+                    started,
+                    f"{CONFLICT}: update of {change.key}",
+                )
             rowcount, error = self._apply_change(change, state_rows)
             if error is not None:
+                if error == CONFLICT:
+                    # A 0-rowcount UPDATE/DELETE is a concurrency conflict, reported
+                    # per row just like the real providers do (FR-7.8).
+                    conflicts.append(RowConflict(change, statement, error))
                 return self._rollback(
-                    state_rows, snapshot, results, change, statement, index, started, error
+                    state_rows,
+                    snapshot,
+                    results,
+                    conflicts,
+                    change,
+                    statement,
+                    index,
+                    started,
+                    error,
                 )
             results.append(StatementResult(change, statement, rowcount, True, None))
+        if settings.identity_insert and any(s.kind is ChangeKind.INSERT for s in statements):
+            self.transaction_log.append("IDENTITY_INSERT OFF")
         self.transaction_log.append("COMMIT")
         return ExecuteResult(
             committed=True,
@@ -213,7 +262,7 @@ class FakeProvider:
                     raise ValueError("change is missing a row key")
                 index = _find_row(rows, change.key)
                 if index is None:
-                    return 0, "optimistic concurrency: 0 rows affected"
+                    return 0, CONFLICT
                 if change.kind is ChangeKind.UPDATE:
                     if change.after is None:
                         raise ValueError("UPDATE change is incomplete")
@@ -227,6 +276,7 @@ class FakeProvider:
         state_rows: list[dict[str, object]],
         snapshot: list[dict[str, object]],
         results: list[StatementResult],
+        conflicts: list[RowConflict],
         change: PendingChange,
         statement: SqlStatement,
         index: int,
@@ -243,6 +293,7 @@ class FakeProvider:
             duration_ms=_elapsed_ms(started),
             failed_index=index,
             error=error,
+            conflicts=tuple(conflicts),
         )
 
 

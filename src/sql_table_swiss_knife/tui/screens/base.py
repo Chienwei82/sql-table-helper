@@ -30,7 +30,7 @@ from ..widgets import AppHeader, KeyHint, KeyHints, StatusLine
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken at runtime
     from ..app import AppServices, SwissKnifeApp
 
-__all__ = ["AppScreen", "WorkResult", "app_services"]
+__all__ = ["AppScreen", "WorkResult", "app_services", "owning_app"]
 
 T = TypeVar("T")
 
@@ -43,6 +43,16 @@ def app_services(node: Widget) -> AppServices:
     hang off our own :class:`~tui.app.SwissKnifeApp`.
     """
     return cast("SwissKnifeApp", node.app).services
+
+
+def owning_app(node: Widget) -> SwissKnifeApp:
+    """The :class:`~tui.app.SwissKnifeApp` owning ``node``.
+
+    Screens need the app's own extras (settings, the clipboard chain), which ``Screen.app``
+    is typed as the base ``App``; this one cast documents the expectation instead of
+    scattering ``# type: ignore`` comments.
+    """
+    return cast("SwissKnifeApp", node.app)
 
 
 #: Signature of the callback a worker hands its result to.
@@ -245,6 +255,20 @@ class AppScreen(Screen[None]):
     def set_header(self, title: str) -> None:
         """Set the header title, keeping the connection summary in sync."""
         self.header.show_connection(title, self.connection.state, self._session_detail())
+        self._sync_badge()
+
+    def _sync_badge(self) -> None:
+        """Show the environment pill for the live session, hidden when disconnected.
+
+        The badge is driven by the *session*, not by the screen: "PROD" has to be true
+        everywhere at once, and a screen that forgot to show it would be the one place
+        the user assumed they were safe.
+        """
+        session = self.connection.session
+        self.header.show_environment(
+            session.environment if session is not None else None,
+            read_only=self.services.safety.read_only,
+        )
 
     def refresh_header(self) -> None:
         """Re-render the header and hints from the current service state."""

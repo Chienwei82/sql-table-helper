@@ -13,6 +13,7 @@ from sql_table_swiss_knife.domain import (
     TableRef,
 )
 from sql_table_swiss_knife.providers import (
+    ApplyOptions,
     build_delete,
     build_insert,
     build_select,
@@ -218,3 +219,194 @@ def test_build_statements_dispatch(dialect: TSqlDialect, country_table: Table) -
     assert [s.kind for s in statements] == [ChangeKind.INSERT, ChangeKind.DELETE]
     assert statements[0].sql_parametrized.startswith("INSERT INTO [dbo].[Country]")
     assert statements[1].sql_parametrized.startswith("DELETE FROM [dbo].[Country]")
+
+
+# -- M5: identity inserts, compare-all concurrency, keyset paging ---------------
+
+
+def test_an_identity_column_cannot_be_written_by_default(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    with pytest.raises(ValueError, match="identity column 'RegionId' cannot be written"):
+        build_insert(dialect, region_table, {"RegionId": 5, "Name": "Hesse"})
+
+
+def test_identity_insert_mode_writes_the_identity_value(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    statement = build_insert(
+        dialect,
+        region_table,
+        {"RegionId": 5, "Name": "Hesse"},
+        identity_insert=True,
+    )
+    assert statement.sql_parametrized.startswith("INSERT INTO [dbo].[Region] ([RegionId], [Name])")
+    assert statement.param_values == (5, "Hesse")
+
+
+def test_identity_insert_is_the_only_way_to_bypass_the_identity_guard(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    # Computed and rowversion columns stay unwritable even in IDENTITY_INSERT mode.
+    with pytest.raises(ValueError, match="computed column 'NameUpper' cannot be written"):
+        build_insert(dialect, region_table, {"NameUpper": "X"}, identity_insert=True)
+    with pytest.raises(ValueError, match="rowversion column 'RowVer' cannot be written"):
+        build_insert(dialect, region_table, {"RowVer": b"\x00"}, identity_insert=True)
+
+
+def test_a_null_original_value_is_compared_with_is_null(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "ParentRegionId": None},
+        after={"RegionId": 1, "Name": "Bayern", "ParentRegionId": None},
+    )
+    statement = build_update(dialect, region_table, change, compare_original=True)
+    # WHERE [col] = NULL never matches, so the NULL guard must use IS NULL.
+    assert "AND [ParentRegionId] IS NULL" in statement.sql_parametrized
+    assert statement.param_values == ("Bayern", 1, None)
+
+
+def test_compare_original_adds_every_unchanged_column_to_the_where_clause(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "SortOrder": 3},
+        after={"RegionId": 1, "Name": "Bayern", "SortOrder": 3},
+    )
+    without = build_update(dialect, region_table, change)
+    assert without.sql_parametrized == (
+        "UPDATE [dbo].[Region] SET [Name] = @p0 WHERE [RegionId] = @p1"
+    )
+    with_guard = build_update(dialect, region_table, change, compare_original=True)
+    assert with_guard.sql_parametrized == (
+        "UPDATE [dbo].[Region] SET [Name] = @p0 WHERE [RegionId] = @p1 AND [SortOrder] = @p2"
+    )
+
+
+def test_compare_original_never_re_checks_a_column_the_statement_writes(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "SortOrder": 3},
+        after={"RegionId": 1, "Name": "Bayern", "SortOrder": 9},
+    )
+    statement = build_update(dialect, region_table, change, compare_original=True)
+    # [SortOrder] is being written, so re-checking its old value could never match.
+    assert statement.sql_parametrized.count("[SortOrder]") == 1
+    assert "[SortOrder] = @p" not in statement.sql_parametrized.split("WHERE")[1]
+
+
+def test_a_rowversion_table_prefers_the_rowversion_guard_over_compare_all(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "RowVer": b"\x00\x01", "SortOrder": 3},
+        after={"RegionId": 1, "Name": "Bayern", "RowVer": b"\x00\x01", "SortOrder": 3},
+    )
+    statement = build_update(dialect, region_table, change, compare_original=True)
+    assert statement.sql_parametrized == (
+        "UPDATE [dbo].[Region] SET [Name] = @p0 WHERE [RegionId] = @p1 AND [RowVer] = @p2"
+    )
+    assert "[SortOrder]" not in statement.sql_parametrized
+
+
+def test_compare_original_guards_a_delete_with_all_original_values(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.DELETE,
+        table=TABLE,
+        key=(("Code", "DE"),),
+        before={"Code": "DE", "Name": "Germany"},
+    )
+    statement = build_delete(dialect, country_table, change, compare_original=True)
+    assert statement.sql_parametrized == (
+        "DELETE FROM [dbo].[Country] WHERE [Code] = @p0 AND [Name] = @p1"
+    )
+
+
+def test_a_rowversion_delete_uses_the_rowversion_not_every_column(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.DELETE,
+        table=TABLE,
+        key=(("Code", "DE"),),
+        before={"Code": "DE", "Name": "Germany", "RowVer": b"\x00\x09"},
+    )
+    statement = build_delete(dialect, country_table, change, compare_original=True)
+    assert statement.sql_parametrized == (
+        "DELETE FROM [dbo].[Country] WHERE [Code] = @p0 AND [RowVer] = @p1"
+    )
+
+
+def test_build_statements_passes_the_options_through(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    change = PendingChange(
+        kind=ChangeKind.INSERT,
+        table=TableRef(schema="dbo", name="Region"),
+        after={"RegionId": 5, "Name": "Hesse"},
+    )
+    with pytest.raises(ValueError, match="identity column"):
+        build_statements(dialect, region_table, [change])
+    statements = build_statements(
+        dialect, region_table, [change], options=ApplyOptions(identity_insert=True)
+    )
+    assert "[RegionId]" in statements[0].sql_parametrized
+
+
+def test_keyset_paging_asks_for_rows_after_the_given_key(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    select = build_select(
+        dialect,
+        country_table,
+        FetchSpec(limit=10, sort=(SortKey("Code"),), after_key=(("Code", "DE"),)),
+    )
+    assert "WHERE ([Code]) > (@p0)" in select.sql
+    assert "OFFSET 0 ROWS" in select.sql
+    assert select.params[0].value == "DE"
+
+
+def test_keyset_paging_is_skipped_for_a_user_chosen_sort(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    # A descending sort reorders rows, so "after this key" is not the next page.
+    select = build_select(
+        dialect,
+        country_table,
+        FetchSpec(limit=10, sort=(SortKey("Name", descending=True),), after_key=(("Code", "DE"),)),
+    )
+    assert ">" not in select.sql
+    assert select.params == ()
+
+
+def test_filters_and_the_keyset_cursor_share_placeholder_order(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    select = build_select(
+        dialect,
+        country_table,
+        FetchSpec(
+            limit=10,
+            sort=(SortKey("Code"),),
+            filters=(RowFilter("Name", FilterOp.LIKE, "%er%"),),
+            after_key=(("Code", "DE"),),
+        ),
+    )
+    assert select.sql.index("[Name] LIKE @p0") < select.sql.index("([Code]) > (@p1)")
+    assert [param.name for param in select.params] == ["@p0", "@p1"]

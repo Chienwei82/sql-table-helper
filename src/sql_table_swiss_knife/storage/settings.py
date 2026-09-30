@@ -16,10 +16,26 @@ import tomli_w
 from ..infra.errors import AppError
 from .paths import settings_path
 
-__all__ = ["Settings", "SettingsError", "SettingsStore"]
+__all__ = [
+    "COPY_FORMATS",
+    "DATE_FORMATS",
+    "NUMBER_LOCALES",
+    "Settings",
+    "SettingsError",
+    "SettingsStore",
+]
 
 #: Theme used when the file is absent or names a theme that is not registered.
 DEFAULT_THEME = "default-dark"
+
+#: Accepted ``copy_format`` values (FR-4.2).
+COPY_FORMATS = frozenset({"tsv", "csv", "json"})
+
+#: Accepted ``paste_number_locale`` values: ``en`` and ``de`` decimal conventions.
+NUMBER_LOCALES = frozenset({"en", "de"})
+
+#: Accepted ``paste_date_format`` values (day-first, month-first, ISO).
+DATE_FORMATS = frozenset({"iso", "dmy", "mdy"})
 
 
 class SettingsError(AppError):
@@ -41,6 +57,21 @@ class Settings:
     clipboard_read_fallback: bool = False
     rowcount_advisory_above: int = 50000
     last_profile: str | None = None
+    # -- M7: clipboard (DESIGN §13.2) --
+    #: Format the data-copy action uses: ``tsv`` (Excel/Sheets), ``csv`` or ``json``.
+    copy_format: str = "tsv"
+    #: Text that means SQL NULL on paste (FR-4.6). Empty disables the token entirely.
+    paste_null_token: str = "NULL"
+    #: When True the null token is pasted as ordinary text instead of NULL.
+    paste_null_as_literal: bool = False
+    #: How pasted numbers are written: ``en`` (1,234.56) or ``de`` (1.234,56).
+    paste_number_locale: str = "en"
+    #: How pasted dates are written: ``iso`` (2026-01-31), ``dmy`` (31.01.2026) or
+    #: ``mdy`` (01/31/2026).
+    paste_date_format: str = "iso"
+    #: Upper bound on pasted rows; a bigger block is refused with a message rather
+    #: than staging thousands of rows by accident.
+    paste_max_rows: int = 5000
 
     def __post_init__(self) -> None:
         if not self.theme.strip():
@@ -55,6 +86,22 @@ class Settings:
             raise SettingsError(
                 f"rowcount_advisory_above must be >= 0, got {self.rowcount_advisory_above}"
             )
+        if self.copy_format not in COPY_FORMATS:
+            raise SettingsError(
+                f"copy_format must be one of {sorted(COPY_FORMATS)}, got {self.copy_format!r}"
+            )
+        if self.paste_number_locale not in NUMBER_LOCALES:
+            raise SettingsError(
+                f"paste_number_locale must be one of {sorted(NUMBER_LOCALES)}, "
+                f"got {self.paste_number_locale!r}"
+            )
+        if self.paste_date_format not in DATE_FORMATS:
+            raise SettingsError(
+                f"paste_date_format must be one of {sorted(DATE_FORMATS)}, "
+                f"got {self.paste_date_format!r}"
+            )
+        if self.paste_max_rows < 1:
+            raise SettingsError(f"paste_max_rows must be >= 1, got {self.paste_max_rows}")
 
     def with_theme(self, theme: str) -> Settings:
         """Return a copy using a different theme (the way the app persists a switch)."""

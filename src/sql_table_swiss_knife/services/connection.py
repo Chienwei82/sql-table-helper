@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, cast
 
-from ..domain.connection import AuthMode, ConnectionProfile, ConnectionResult
+from ..domain.connection import AuthMode, ConnectionProfile, ConnectionResult, Environment
 from ..providers import ActiveConnection, DatabaseProvider, get_provider
 from ..storage import ProfileStore, SecretStore, default_secret_store
 
@@ -46,6 +46,8 @@ class SessionInfo:
     provider: str
     server: str
     database: str
+    #: Which environment the profile declared (M8 safety); drives the header badge.
+    environment: Environment = Environment.DEVELOPMENT
 
     @property
     def label(self) -> str:
@@ -210,6 +212,7 @@ class ConnectionService:
                 provider=profile.provider,
                 server=conn.server,
                 database=conn.database,
+                environment=profile.environment,
             )
             self._state = ConnectionState.CONNECTED
             self._last_error = None
