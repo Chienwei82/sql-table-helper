@@ -1,0 +1,67 @@
+# SQL Server 2022 (Developer) + catalog-like sample database for swiss-knife testing.
+#
+#   docker compose up -d        # start server, then load init/01_sample_catalog.sql
+#   docker compose down -v      # wipe data
+#
+# Connect: localhost,1433 · user sa · password ${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}
+# Database: SwissKnifeSample
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}"
+      MSSQL_TCP_PORT: "1433"
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      # sqlcmd moved to /opt/mssql-tools18/bin in recent images (needs -C for TLS);
+      # fall back to the legacy path on older tags.
+      test:
+        - CMD-SHELL
+        - >
+          SQLCMD="$(command -v sqlcmd || true)";
+          if [ -z "$$SQLCMD" ]; then
+            for p in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd; do
+              if [ -x "$$p" ]; then SQLCMD="$$p"; break; fi
+            done;
+          fi;
+          [ -n "$$SQLCMD" ] || exit 1;
+          TRUST=""; case "$$SQLCMD" in *tools18*) TRUST="-C" ;; esac;
+          "$$SQLCMD" -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" $$TRUST -Q "SELECT 1" >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  sample-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}"
+    volumes:
+      - ./init:/init:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        SQLCMD="$(command -v sqlcmd || true)"
+        if [ -z "$$SQLCMD" ]; then
+          for p in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd; do
+            if [ -x "$$p" ]; then SQLCMD="$$p"; break; fi
+          done
+        fi
+        [ -n "$$SQLCMD" ] || { echo "sqlcmd not found in image" >&2; exit 1; }
+        TRUST=""
+        case "$$SQLCMD" in *tools18*) TRUST="-C" ;; esac
+        "$$SQLCMD" -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" $$TRUST -b -i /init/01_sample_catalog.sql
+        echo "SwissKnifeSample database initialized."
+
+volumes:
+  sqlserver-data:
