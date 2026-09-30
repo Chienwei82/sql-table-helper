@@ -4,7 +4,21 @@ dynamic = ["version"]
 description = "Terminal (TUI) app to view and edit rows of catalog/lookup tables without writing SQL — and to show the SQL it runs."
 readme = "README.md"
 requires-python = ">=3.14"
-keywords = ["tui", "sql", "sqlserver", "database", "crud", "catalog"]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["tui", "sql", "sqlserver", "database", "crud", "catalog", "textual"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Terminals",
+    "Typing :: Typed",
+]
 dependencies = [
     "textual>=8.2",
     "rich>=15",
@@ -13,6 +27,18 @@ dependencies = [
     "platformdirs>=4",
     "tomli-w>=1.2.0",
 ]
+
+[project.optional-dependencies]
+# pyperclip is a better clipboard backend than the platform commands where it is
+# available; the app works without it (see the fallback chain in the README).
+clipboard = ["pyperclip>=1.9"]
+# Only needed to run scripts/build_standalone.py; the app itself never imports it.
+standalone = ["pyinstaller>=6.11"]
+
+[project.urls]
+Homepage = "https://github.com/example/sql-table-swiss-knife"
+Source = "https://github.com/example/sql-table-swiss-knife"
+Issues = "https://github.com/example/sql-table-swiss-knife/issues"
 
 [project.scripts]
 sql-table-swiss-knife = "sql_table_swiss_knife.cli:main"
@@ -26,6 +52,7 @@ dev = [
     "ruff>=0.14",
     "mypy>=1.19",
     "pytest-textual-snapshot>=1.0.0",
+    "import-linter>=2.3",
 ]
 
 [build-system]
@@ -73,3 +100,22 @@ markers = [
 [tool.coverage.run]
 source = ["sql_table_swiss_knife"]
 branch = true
+
+[tool.importlinter]
+root_package = "sql_table_swiss_knife"
+
+# The architecture in docs/ARCHITECTURE.md, as an executable contract. Each layer is
+# allowed to import the ones below it and nothing above: the point is that `domain`
+# stays driver-free, `services` stays testable without a terminal, and `tui` cannot
+# contain SQL or file I/O.
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+layers = [
+    "sql_table_swiss_knife.tui",
+    "sql_table_swiss_knife.services",
+    "sql_table_swiss_knife.storage",
+    "sql_table_swiss_knife.providers",
+    "sql_table_swiss_knife.infra",
+    "sql_table_swiss_knife.domain",
+]

@@ -146,7 +146,26 @@ CUSTOMER_VIEW = Table(
     triggers=(Trigger("trg_v_Customer_IO", ("INSERT", "UPDATE"), "INSTEAD OF"),),
 )
 
-SAMPLE_TABLES: tuple[Table, ...] = (COUNTRY, AUDIT, ORDER, CUSTOMER_VIEW)
+#: A deliberately *wide* table with a long-text column: 12 columns (so the grid must
+#: scroll horizontally and the PK freeze matters) and one nvarchar(max) description.
+#: M8's wide/long-cell handling is only provable against a table shaped like this.
+WIDE_NOTES = Table(
+    schema="docs",
+    name="Notes",
+    kind=TableKind.BASE_TABLE,
+    columns=(
+        Column("Id", 1, "int", None, 10, 0, False, None, True, is_primary_key=True),
+        Column("Body", 2, "nvarchar", None, None, None, True, None, False),
+        *(
+            Column(f"Attr{index}", index + 3, "int", None, 10, 0, True, None, False)
+            for index in range(10)
+        ),
+    ),
+    primary_key=PrimaryKey("PK_Notes", ("Id",)),
+)
+
+#: A keyless table, to prove the freeze does not grab an arbitrary data column.
+SAMPLE_TABLES: tuple[Table, ...] = (COUNTRY, AUDIT, ORDER, CUSTOMER_VIEW, WIDE_NOTES)
 
 
 def demo_profile(name: str = "catalog", *, database: str | None = "test") -> ConnectionProfile:
@@ -193,6 +212,19 @@ SAMPLE_ROWS: dict[str, list[dict[str, object]]] = {
         {"Id": 2, "CountryCode": "FR"},
     ],
     "v_Customer": [{"Code": "DE"}, {"Code": "FR"}],
+    "Notes": [
+        {
+            "Id": 1,
+            "Body": (
+                "A deliberately long description, of the kind catalog tables really "
+                "carry. The grid cannot show it in a column, and the user must still "
+                "be able to read every word of it without widening the terminal past "
+                "usability. End of the description."
+            ),
+            **{f"Attr{index}": index for index in range(10)},
+        },
+        {"Id": 2, "Body": "short", **{f"Attr{index}": None for index in range(10)}},
+    ],
 }
 
 
@@ -262,6 +294,7 @@ def seeded_profiles(tmp_path: Path) -> Iterator[ProfileStore]:
 __all__ = [
     "SAMPLE_ROWS",
     "SAMPLE_TABLES",
+    "WIDE_NOTES",
     "AppFactory",
     "ProfileStore",
     "active_screen",

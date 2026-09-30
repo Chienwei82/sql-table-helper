@@ -257,6 +257,24 @@ class ChangeService:
     def table(self) -> Table:
         return self._table
 
+    def rebind(self, table: Table) -> bool:
+        """Point this service at refreshed metadata, keeping the staged changes.
+
+        Reloading a table (a manual ``r``, or a reconnect after a dropped link) must not
+        cost the user their work: the staged set is keyed by the table's *ref*, which a
+        refresh does not change, so the buffer survives while the metadata, the
+        validation rules and the identity columns are replaced with the fresh copy.
+
+        Returns:
+            True when the buffer was carried over, False when the refresh turned out to
+            describe a *different* table — in which case the staged changes belonged to
+            something else and are dropped rather than applied to the wrong rows.
+        """
+        if table.ref != self._table.ref:
+            return False
+        self._table = table
+        return True
+
     @property
     def is_empty(self) -> bool:
         return self.changes.is_empty

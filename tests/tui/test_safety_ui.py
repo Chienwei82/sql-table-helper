@@ -6,12 +6,10 @@ refused, whether the Apply dialog appears at all, and whether the typed word is
 required before the confirm button arms.
 """
 
-from dataclasses import replace
-
 from textual.app import App
 from textual.widgets import Button, Input
 
-from sql_table_swiss_knife.domain import Environment
+from sql_table_swiss_knife.domain import ChangeKind, Environment
 from sql_table_swiss_knife.services import (
     PRODUCTION_CONFIRM_WORD,
     ApplyVerdict,
@@ -80,11 +78,8 @@ async def test_a_production_profile_opens_read_only_and_says_so(
     app = app_factory(profiles=seeded_profiles)
     async with app.run_test() as pilot:
         await _open(app, pilot)
-        # The badge reports the *session*, so both parts are set the way a production
-        # connection would set them: the profile's environment and the resulting posture.
-        session = app.connection.session
-        assert session is not None
-        app.connection._session = replace(session, environment=Environment.PRODUCTION)
+        # The badge follows the write policy, which is the thing that actually gates
+        # the Apply — so setting the environment alone is enough to repaint it.
         app.safety.environment = Environment.PRODUCTION
         app.safety.read_only = True
         active_screen(app, TableEditorScreen).refresh_header()
@@ -92,6 +87,27 @@ async def test_a_production_profile_opens_read_only_and_says_so(
         text = _badge_text(app)
         assert "PROD" in text
         assert "RO" in text
+
+
+async def test_the_badge_cannot_disagree_with_the_write_gate(
+    app_factory: AppFactory, seeded_profiles: ProfileStore, provider: FakeProvider
+) -> None:
+    """A badge that reads DEV while Apply demands a production word is worse than none.
+
+    The two live in different objects — the session and the policy — so nothing but a
+    test stops them drifting apart. This is the one safety assertion in the suite that
+    is about the *display* rather than the gate, and it is the reason it exists.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test() as pilot:
+        screen = await _open(app, pilot)
+        assert screen is not None
+        app.safety.environment = Environment.PRODUCTION
+        app.safety.read_only = False
+        active_screen(app, TableEditorScreen).refresh_header()
+        await pilot.pause()
+        assert "PROD" in _badge_text(app)
+        assert app.safety.confirmation_for({ChangeKind.UPDATE: 1}).required
 
 
 # -- read-only enforcement --------------------------------------------------

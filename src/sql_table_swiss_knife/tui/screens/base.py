@@ -263,12 +263,15 @@ class AppScreen(Screen[None]):
         The badge is driven by the *session*, not by the screen: "PROD" has to be true
         everywhere at once, and a screen that forgot to show it would be the one place
         the user assumed they were safe.
+
+        The environment itself comes from :class:`SafetyPolicy` rather than from the
+        session object, because the policy is what actually gates the writes. A badge
+        that could read ``DEV`` while the typed-confirmation rule fired as ``PROD``
+        would be worse than no badge at all — it would be confidently wrong.
         """
-        session = self.connection.session
-        self.header.show_environment(
-            session.environment if session is not None else None,
-            read_only=self.services.safety.read_only,
-        )
+        safety = self.services.safety
+        environment = safety.environment if self.connection.session is not None else None
+        self.header.show_environment(environment, read_only=safety.read_only)
 
     def refresh_header(self) -> None:
         """Re-render the header and hints from the current service state."""

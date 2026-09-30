@@ -9,10 +9,11 @@ Legend: ✅ done · 🔶 partial · ⛔ not started · 🚧 in progress
 
 ## Current state
 
-**Milestone 6 complete** — the SQL panel: the SQL for every pending change, in apply order,
-in three renderings (parameterized / literal / script), with syntax highlighting, three
-copy targets, "generate SQL for…" on any row or the current filter, and a hard dry-run
-posture — the panel produces text and never executes anything.
+**Milestone 8 complete** — hardening & release: the safety layer (per-profile read-only
+defaulting ON for production, the environment badge, the Apply confirmation with counts
+and affected tables, the typed production word, the local audit log), robustness for
+huge/wide/long/binary tables and connection loss, the `F1` help screen with a configurable
+keymap, documentation, and packaging.
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -22,13 +23,27 @@ posture — the panel produces text and never executes anything.
 | M4 | Read-only grid & inspector | ✅ |
 | M5 | Edit & stage changes | ✅ |
 | M6 | The SQL panel (FR-5) | ✅ |
-| M7 | Clipboard | ⛔ |
-| M8 | Hardening & release | ⛔ |
+| M7 | Clipboard | ✅ |
+| M8 | Hardening & release | ✅ |
 
-Quality gates at the time of writing: `ruff check` ✅ · `ruff format --check` ✅ ·
-`mypy --strict` ✅ · `pytest` **658 passed, 14 skipped** (the skips are the live suite).
-The SVG snapshot set predates this milestone and is out of sync with the tests (see *Known
-gaps*); the 99 new tests are ordinary pytest/Pilot tests, not snapshots.
+**Quality gates at the time of writing:**
+
+| Gate | Result |
+|---|---|
+| `ruff check .` | ✅ clean |
+| `ruff format --check .` | ✅ 143 files already formatted |
+| `mypy` (strict, `src` + `tests`) | ✅ no issues in 136 source files |
+| `lint-imports` (layering contract) | ✅ 1 kept, 0 broken |
+| `pytest` | ✅ **955 passed, 14 skipped** (the skips are the live suite) |
+| `uv build` | ✅ sdist + wheel; the wheel installs and both entry points run |
+| Coverage | **87%** (statements + branches) |
+
+The coverage is deliberately uneven, and the gaps are the honest part of the picture:
+`services/`, `domain/`, `storage/` and `providers/` sit in the high 80s/90s because that is
+where a bug is expensive, while the thin screens (`lookup_picker` 24%, `quick_filter` 37%,
+`column_picker` 39%) are lightly covered and the giant `table_editor.py` (73%) carries the
+long tail of interaction branches. The 0% on `__main__.py` is the two-line module
+shim. The full report is `uv run pytest --cov=sql_table_swiss_knife --cov-report=term-missing`.
 
 ---
 
@@ -513,7 +528,95 @@ none, where it would corrupt the first column name).
   terminal accepting them.
 - **`infra/logging.py`** (redacting filter) and **`import-linter`** are still open (M8).
 
-## Next milestone — M8: hardening & release
+## M8 — Hardening & release ✅
 
-- Mouse-drag selection in the grid, so `ctrl+c` can copy a rectangle without the keyboard.
-- Excel *file* (.xlsx) import — still not in scope (SPEC §5); CSV/JSON file import is.
+The milestone whose deliverable is *boringness*: a tool that writes to somebody's database
+should be predictable, refuse the dangerous thing by default, and leave a record.
+
+### Safety (`services/safety.py`, `tui/widgets/header.py`)
+
+- **Read-only per profile**, defaulting **ON for `production`**. `ConnectionProfile` gained
+  `environment: Environment` and `read_only: bool | None`; omitting the flag means "follow
+  the environment". `SafetyPolicy.for_profile()` resolves the posture at connect time.
+- **The session toggle (`f5`)** and the process-wide `--read-only`, which *locks* the
+  toggle rather than merely setting it.
+- **The environment badge** (`EnvBadge`): a big coloured pill in the header — red `PROD`,
+  amber `STAGING`, blue `TEST`, green `DEV` — plus `RO` when read-only. Worded, not just
+  coloured, because "which database" and "may I write" are different questions.
+  The badge reads the **same `SafetyPolicy`** that gates the write, so the two cannot
+  disagree; `test_the_badge_cannot_disagree_with_the_write_gate` pins it (it caught a real
+  bug during this milestone, where the badge showed `DEV` while the gate fired as `PROD`).
+- **The Apply confirmation** (`tui/screens/apply_confirm.py`): the counts by kind, the
+  **affected tables**, the transaction guarantee, and a **typed confirmation word** for
+  production and for large delete batches. `y`/`enter` both re-check the word, so the
+  prompt cannot be shortcut with an accelerator.
+- **Refusals**: read-only sessions, views, server-managed columns, and `UPDATE`/`DELETE`
+  on a table with **no primary or unique key** — overridable with
+  `allow_keyless_writes = true` in `settings.toml` (wired through in this milestone;
+  the refusal message pointed at a key that did not exist yet).
+- **The audit log** (`storage/audit.py`): one JSON line per Apply — committed, *rolled
+  back* or *refused* — with the UTC timestamp, profile, environment, server, database,
+  table, counts, the **literal** statements, outcome and duration. **No passwords, ever**,
+  enforced by `assert_no_credentials()` on the way in and on the way out.
+
+### Robustness (`services/cellview.py`, `tui/screens/cell_view.py`)
+
+- **Cell typing as a pure function**: `cell_view()` decides plain / long-text / binary and
+  how to expand it, unit tested without a widget. Long text and multi-line values open a
+  read-only, hard-wrapped **expand view**; binary values show a hex preview in the cell and
+  a full hex dump expanded.
+- **Wide tables**: horizontal scrolling with the identity column **frozen**.
+- **Connection loss** is a first-class state: a reconnect prompt that says the staged work
+  is safe, and a reconnect that invalidates the dead catalog cache and re-reads the rows.
+- **Bug found and fixed here**: `_apply_metadata` replaced the staging buffer on every
+  reload, so *both* `r` and the reconnect silently discarded the user's pending edits.
+  `ChangeService.rebind()` now re-points the buffer at the refreshed metadata, and refuses
+  when the table's identity has actually changed (so edits can never land on another
+  table's rows). Two tests were added and verified to fail without the fix.
+
+### Help & keybindings (`tui/keybindings.py`, `tui/keymap.py`, `tui/screens/help.py`)
+
+- **One registry** of every documented action, its keys and its description.
+- **A drift check** against the real screens' `BINDINGS`: rebinding a key in a screen
+  without updating the documentation fails the test suite.
+- **A configurable keymap** (`keybindings.toml`, `SWISSKNIFE_KEYBINDINGS` override): an
+  unknown action name, a non-string value or malformed TOML is reported as a warning and
+  the defaults are kept — an optional preferences file must never stop the app.
+- **`F1` / `?`** opens the help screen from anywhere.
+
+### Documentation & packaging
+
+- `README.md` rewritten: screenshots, the safety model, the awkward-data section, install,
+  known limitations.
+- `docs/screenshots/*.svg` — **exported from the snapshot suite**, so the README images
+  cannot drift from the code without a test failing.
+- `docs/ARCHITECTURE.md` — layering, the safety model, the concurrency story, the testing
+  strategy; the layering is now an **executable contract** via `import-linter` (which was
+  an open M7 item and is now configured and passing).
+- `docs/ADDING_A_PROVIDER.md` — the "how to add a new DBMS" guide, PostgreSQL as the
+  worked example, with a checklist.
+- `pyproject.toml` is publish-ready: license, classifiers, URLs, `[project.optional-dependencies]`
+  (`clipboard`, `standalone`).
+- `LICENSE` (MIT) added — `license-files` pointed at a file that did not exist.
+- `scripts/build_standalone.py` — the optional single-file PyInstaller build, which fails
+  with a clear message when the extra is not installed.
+- `--print-config-dir` added so documentation and scripts stop guessing where the files are.
+- **Dead code removed**: `transfer.looks_like_json` / `describe_export` / `json_preview`
+  had no callers; `keymap_path` moved next to the other path helpers in `storage/paths.py`.
+
+### Tests
+
+| File | What it covers |
+|---|---|
+| `tests/unit/services/test_safety.py` | the write posture as pure functions: every refusal, the typed-confirmation rule, the affected-table listing |
+| `tests/unit/storage/test_audit.py` | entry validation, the no-credentials assertion, append/rotation, reading back |
+| `tests/unit/services/test_cellview.py` | cell typing: truncation, the binary threshold, the hex dump, the expand decision |
+| `tests/unit/tui/test_keybindings.py` | the registry, the **drift check against real widgets**, keymap parsing, the first-run template |
+| `tests/unit/storage/test_paths.py` | config file locations and their env overrides |
+| `tests/tui/test_safety_ui.py` | the badge, read-only enforcement in the UI, the Apply gate, the typed word |
+| `tests/tui/test_help.py` | the F1 screen and the keymap override taking effect |
+| `tests/tui/test_robustness.py` | cell expansion, connection loss, reconnect, and the reload-preserves-staging fix |
+
+The SVG snapshot set was **regenerated** — the stale-snapshot gap carried from M6 is
+closed, and the new M8 screens (help, both Apply confirmations, the expand view, the
+reconnect prompt, the read-only session, the wide table) are covered by it.

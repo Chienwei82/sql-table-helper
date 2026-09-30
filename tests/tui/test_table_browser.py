@@ -47,7 +47,7 @@ async def test_lists_objects_grouped_by_schema(
         await pilot.pause()
         await _connected(app, pilot)
         assert isinstance(app.screen, TableBrowserScreen)
-        assert _labels(app) == ["dbo (2)", "reporting (1)", "sales (1)"]
+        assert _labels(app) == ["dbo (2)", "docs (1)", "reporting (1)", "sales (1)"]
         assert _tree(app).selected_summary() == AUDIT.summary  # first row of dbo
 
 
@@ -109,7 +109,7 @@ async def test_count_line_reports_matches_and_total(
         await _connected(app, pilot)
         count = str(app.screen.query_one("#table-count").render())
         assert f"{len(SAMPLE_TABLES)}/{len(SAMPLE_TABLES)}" in count
-        assert "3 schema(s)" in count
+        assert "4 schema(s)" in count
 
 
 async def test_escape_leaves_the_filter_before_the_screen(

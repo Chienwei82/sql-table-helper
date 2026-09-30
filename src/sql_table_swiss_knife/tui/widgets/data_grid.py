@@ -140,6 +140,23 @@ class DataGrid(DataTable[str]):
 
     # -- data ---------------------------------------------------------------
 
+    @property
+    def frozen_count(self) -> int:
+        """How many leading columns are frozen (the PK, or nothing)."""
+        return self.fixed_columns
+
+    def set_frozen(self, count: int) -> None:
+        """Freeze the first ``count`` columns so they stay put on a wide table.
+
+        Freezing the identity columns is what makes a 60-column table usable: without
+        it, scrolling right to read a description loses the very column that says which
+        row you are looking at. Textual's own ``fixed_columns`` does the work, so the
+        freeze is real (it survives sorting and cursor movement) rather than a repaint.
+        """
+        # Textual asserts 0 <= count <= total columns; clamping here keeps the widget
+        # total when the column set changes under it (a reload with a hidden column).
+        self.fixed_columns = max(0, min(count, len(self._columns)))
+
     def load(
         self,
         table: Table,
@@ -163,7 +180,26 @@ class DataGrid(DataTable[str]):
         self._columns = tuple(column for column in table.columns if column.name not in hidden)
         for column in self._columns:
             self.add_column(header_label(table, column), key=column.name)
+        self.set_frozen(self._frozen_count(table, hidden))
         self.set_rows(rows, keys=keys)
+
+    def _frozen_count(self, table: Table, hidden: frozenset[str]) -> int:
+        """How many leading *visible* columns are the row identity.
+
+        Counted in visible columns, not metadata: hiding the PK column has to move the
+        freeze with it, otherwise the grid would freeze an arbitrary data column and
+        quietly break the guarantee the freeze exists for.
+        """
+        identity = [name for name in table.identity_columns if name not in hidden]
+        # Only a *leading* run can be frozen; an identity column that sits in the
+        # middle of a wide table cannot be, so freezing nothing is the honest answer.
+        leading = 0
+        for column in self._columns:
+            if column.name in identity:
+                leading += 1
+            else:
+                break
+        return min(leading, len(self._columns))
 
     def set_rows(self, rows: Sequence[Row], *, keys: Sequence[RowKey | None] | None = None) -> None:
         """Replace the row set, keeping the headers (reload, filter, apply, undo).

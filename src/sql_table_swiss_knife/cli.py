@@ -17,7 +17,7 @@ from rich.table import Table as RichTable
 from . import __version__
 from .domain import AuthMode, Database, Table, TableSummary
 from .providers import get_provider
-from .storage import ProfileStore, default_secret_store, resolve_password
+from .storage import ProfileStore, config_dir, default_secret_store, resolve_password
 from .tui.app import SwissKnifeApp
 
 __all__ = ["build_parser", "main", "render_metadata"]
@@ -42,6 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "refuse every write for this session and lock the read-only toggle: "
             "no staging, no Apply, whatever the profile says (S-9)"
+        ),
+    )
+    parser.add_argument(
+        "--print-config-dir",
+        action="store_true",
+        help=(
+            "print the configuration directory holding profiles.toml, settings.toml, "
+            "keybindings.toml and the audit log, then exit — so scripts and documentation "
+            "do not have to guess where they are"
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -249,6 +258,9 @@ async def _run_inspect(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse CLI arguments, then run the requested command (default: the TUI)."""
     args = build_parser().parse_args(argv)
+    if args.print_config_dir:
+        print(config_dir())
+        return 0
     if args.command == "inspect":
         try:
             return asyncio.run(_run_inspect(args))

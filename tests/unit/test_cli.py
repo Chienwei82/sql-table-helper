@@ -266,3 +266,29 @@ def test_main_returns_error_code_for_failing_inspect(
     code = cli.main(["inspect", "missing", "dbo.Country"])
     assert code == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_print_config_dir_prints_the_directory_and_exits(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag exists so scripts and docs never guess where the files live."""
+    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    assert cli.main(["--print-config-dir"]) == 0
+    assert capsys.readouterr().out.strip() == str(tmp_path)
+
+
+def test_print_config_dir_does_not_launch_the_tui(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A query for a path must not open a full-screen app on someone's terminal."""
+    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    launched = False
+
+    def explode(**kwargs: object) -> None:
+        nonlocal launched
+        launched = True
+        raise AssertionError("the TUI must not start for --print-config-dir")
+
+    monkeypatch.setattr(cli, "SwissKnifeApp", explode)
+    assert cli.main(["--print-config-dir"]) == 0
+    assert launched is False

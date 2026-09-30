@@ -13,21 +13,27 @@ rubbish to be auto-accepted.
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from textual.app import App
+from textual.coordinate import Coordinate
 from textual.pilot import Pilot
 
+from sql_table_swiss_knife.domain import Environment
 from sql_table_swiss_knife.domain.catalog import Table
 from sql_table_swiss_knife.providers import ConnectError
 from sql_table_swiss_knife.storage import ProfileStore
 from sql_table_swiss_knife.tui.app import SwissKnifeApp
 from sql_table_swiss_knife.tui.screens import TableBrowserScreen, TableEditorScreen
+from sql_table_swiss_knife.tui.widgets import DataGrid
 from tests.fakes import FakeProvider
 from tests.tui.conftest import (
     AUDIT,
     COUNTRY,
     CUSTOMER_VIEW,
+    SAMPLE_ROWS,
     SAMPLE_TABLES,
+    WIDE_NOTES,
     AppFactory,
     no_database_profile,
 )
@@ -273,3 +279,123 @@ def test_error_toast(
 def test_snapshots_live_beside_the_tests() -> None:
     """The single-file SVG extension writes into ``__snapshots__`` next to the test."""
     assert (Path(__file__).parent / "__snapshots__").is_dir()
+
+
+# -- M8: safety, robustness and help ----------------------------------------
+
+
+def test_help_screen(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """F1: every binding, grouped, with the safety summary (NFR-6)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await pilot.press("f1")
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_apply_confirmation_development(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """An ordinary Apply: the counts and the affected table, no typed word (FR-7.5)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, COUNTRY)
+        app = pilot.app
+        assert isinstance(app, SwissKnifeApp)
+        screen = cast("TableEditorScreen", app.screen)
+        key, _column, _row_index, _ = screen._cursor()
+        assert key is not None
+        screen.changes.edit_cell(key, "Name", "Germany (edited)", dict(SAMPLE_ROWS["Country"][0]))
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_apply_confirmation_production(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """Against production the dialog escalates: red border and a typed word (FR-7.5)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, COUNTRY)
+        app = pilot.app
+        assert isinstance(app, SwissKnifeApp)
+        app.safety.environment = Environment.PRODUCTION
+        app.safety.read_only = False
+        screen = cast("TableEditorScreen", app.screen)
+        # Production also opens read-only; leaving it writable here is the explicit,
+        # visible act the safety policy is designed to require.
+        screen.refresh_header()
+        key, _column, _row_index, _ = screen._cursor()
+        assert key is not None
+        screen.changes.edit_cell(key, "Name", "Germany (edited)", dict(SAMPLE_ROWS["Country"][0]))
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_cell_expand_view(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A long text cell in full, hard-wrapped and read-only (FR-3.1, M8)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, WIDE_NOTES)
+        app = pilot.app
+        assert isinstance(app, SwissKnifeApp)
+        screen = cast("TableEditorScreen", app.screen)
+        grid = screen.query_one("#editor-grid", DataGrid)
+        grid.cursor_coordinate = Coordinate(0, 1)
+        await pilot.pause()
+        screen.action_expand_cell()
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_connection_lost_reconnect_prompt(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """FR-10: a dropped link offers a reconnect and says the staged work is safe."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, COUNTRY)
+        app = pilot.app
+        assert isinstance(app, SwissKnifeApp)
+        screen = cast("TableEditorScreen", app.screen)
+        key, _column, _row_index, _ = screen._cursor()
+        assert key is not None
+        screen.changes.edit_cell(key, "Name", "Germany (edited)", dict(SAMPLE_ROWS["Country"][0]))
+        screen._handle_connection_lost(ConnectionResetError("peer went away"))
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_read_only_session(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A read-only session: the badge says so and the write hints are gone (S-9)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, COUNTRY)
+        await pilot.press("f5")
+        await _settle(pilot)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)
+
+
+def test_wide_table_frozen_key(
+    snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A 12-column table with its identity column frozen (M8, wide tables)."""
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await _open_table(pilot, WIDE_NOTES)
+
+    snap_compare(app_factory(profiles=seeded_profiles), terminal_size=SIZE, run_before=run_before)

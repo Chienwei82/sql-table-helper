@@ -100,3 +100,23 @@ def test_update_persists_the_change(tmp_path: Path) -> None:
     updated = store.update(Settings(), theme="high-contrast")
     assert updated.theme == "high-contrast"
     assert SettingsStore(store.path).load().theme == "high-contrast"
+
+
+def test_allow_keyless_writes_is_off_by_default() -> None:
+    """The destructive escape hatch must never be the default."""
+    assert Settings().allow_keyless_writes is False
+
+
+def test_allow_keyless_writes_is_read_from_the_file(tmp_path: Path) -> None:
+    """The refusal message names this key, so the key has to actually work."""
+    path = tmp_path / "settings.toml"
+    path.write_text("allow_keyless_writes = true\n", encoding="utf-8")
+    assert SettingsStore(path).load().allow_keyless_writes is True
+
+
+def test_allow_keyless_writes_rejects_a_non_boolean(tmp_path: Path) -> None:
+    """A string "true" must not be silently truthy."""
+    path = tmp_path / "settings.toml"
+    path.write_text('allow_keyless_writes = "yes"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="expected a boolean"):
+        SettingsStore(path).load()

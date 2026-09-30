@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Static
 from ...domain.catalog import Column, Table, TableSummary
 from ...domain.changes import ChangeKind
 from ...domain.rows import Row, RowKey
+from ...services.cellview import cell_view
 from ...services.changes import ApplyError, CellStatus, ChangeService
 from ...services.clipboard import (
     ClipboardBlock,
@@ -24,6 +25,7 @@ from ...services.clipboard import (
     parse_block,
     plan_paste,
 )
+from ...services.connection import is_connection_lost
 from ...services.data import DataService, RowWindow, status_text
 from ...services.inspector import InspectorService, Severity, Warning, fks_for, read_only_reason
 from ...services.lookup import LookupChoice
@@ -44,6 +46,7 @@ from ..widgets.sql_panel import ModeChosen
 from .apply_confirm import ApplyConfirmScreen
 from .base import AppScreen, owning_app
 from .cell_editor import CellEditorScreen
+from .cell_view import CellViewScreen
 from .column_picker import ColumnPickerScreen
 from .confirm import ConfirmScreen
 from .lookup_picker import LookupPickerScreen
@@ -132,6 +135,8 @@ class TableEditorScreen(AppScreen):
         Binding("ctrl+shift+u", "discard_all", "Discard all", show=True),
         Binding("ctrl+s", "apply", "Apply", show=True),
         # -- view (FR-3.2/3.3) --
+        # M8: the expand view for long text and binary cells (FR-3.1).
+        Binding("w", "expand_cell", "Expand cell", show=True),
         Binding("c", "toggle_columns", "Columns", show=True),
         Binding("f", "quick_filter", "Filter", show=True),
         Binding("s", "sort_column", "Sort", show=True),
@@ -169,6 +174,8 @@ class TableEditorScreen(AppScreen):
         self._sql_mode = SqlMode.SCRIPT
         self._sql_open = False
         self._sql_generated: tuple[str, str] | None = None
+        #: Set while a dropped connection is awaiting the user's reconnect decision.
+        self._connection_lost: bool = False
 
     # -- composition --------------------------------------------------------
 
@@ -243,6 +250,11 @@ class TableEditorScreen(AppScreen):
                 if generation != self.generation:
                     return
                 self._inspector.clear()
+                # A dropped connection is not a query failure: it is a dead session, and
+                # the only useful response is to offer a reconnect (FR-10).
+                if is_connection_lost(exc):
+                    self._handle_connection_lost(exc)
+                    return
                 self.report_error(str(exc))
                 return
             if generation != self.generation:
@@ -274,16 +286,25 @@ class TableEditorScreen(AppScreen):
                 )
             except Exception as exc:
                 if generation == self.generation:
-                    self.report_error(str(exc))
+                    if is_connection_lost(exc):
+                        self._handle_connection_lost(exc)
+                    else:
+                        self.report_error(str(exc))
                 return
             if generation != self.generation:
                 return
             self._apply_rows(grown)
 
     def _apply_metadata(self, table: Table, window: RowWindow | None) -> None:
-        """Install freshly loaded metadata (and rows) into every widget."""
+        """Install freshly loaded metadata (and rows) into every widget.
+
+        A reload must not cost the user their staged work (FR-10), so an existing
+        staging buffer is re-pointed at the new metadata instead of being replaced. Only
+        a table that genuinely changed identity gets a fresh buffer.
+        """
+        if self._changes is None or not self._changes.rebind(table):
+            self._changes = ChangeService(self.connection, table)
         self._table = table
-        self._changes = ChangeService(self.connection, table)
         self._inspector.show(table)
         panel = self.query_one("#editor-inspector", InspectorPanel)
         panel.bind_inspector(self._inspector)
@@ -481,6 +502,50 @@ class TableEditorScreen(AppScreen):
 
     def action_fetch_more(self) -> None:
         self.fetch_more_rows()
+
+    # -- cell inspection (M8) ------------------------------------------------
+
+    def action_expand_cell(self) -> None:
+        """Open the focused cell in full — long text wrapped, binary as a hex dump.
+
+        Bound to ``w`` ("wider view") rather than to ``enter``, which already edits:
+        expanding a cell is a *reading* action, and a key that both reads and writes
+        would make the safest action the riskiest to press. A cell with nothing more to
+        show says so instead of opening an empty dialog.
+        """
+        _, column, row_index, _ = self._cursor()
+        if column is None or row_index < 0:
+            return
+        values = self._display_values(row_index)
+        if column.name not in values:
+            self.status.show_message("no value under the cursor")
+            return
+        view = cell_view(values[column.name])
+        if not view.expandable:
+            self.status.show_message(
+                f"{column.name}: {view.summary} — nothing to expand ({view.text})"
+            )
+            return
+        table = self._table
+        self.push(
+            CellViewScreen(
+                values[column.name],
+                title=f"{table.ref if table else ''} · {column.name}",
+                view=view,
+            )
+        )
+
+    def _focused_cell_is_expandable(self) -> bool:
+        """Whether the focused cell has more to show than the grid does (FR-3.1).
+
+        Drives the hint, so the key is advertised only where it does something —
+        an always-present "expand" hint on a column of two-letter codes trains the
+        user to ignore the footer.
+        """
+        _, column, row_index, _ = self._cursor()
+        if column is None or row_index < 0:
+            return False
+        return cell_view(self._display_values(row_index).get(column.name)).expandable
 
     # -- editing ------------------------------------------------------------
 
@@ -1350,7 +1415,10 @@ class TableEditorScreen(AppScreen):
             except Exception as exc:
                 if generation == self.generation:
                     self._write_audit(counts, statements, "rolled_back", 0, str(exc))
-                    self.report_error(str(exc))
+                    if is_connection_lost(exc):
+                        self._handle_connection_lost(exc)
+                    else:
+                        self.report_error(str(exc))
                 return
             if generation != self.generation:
                 return
@@ -1455,6 +1523,8 @@ class TableEditorScreen(AppScreen):
         if self._sql_open:
             hints.append(KeyHint("v", f"sql mode: {self._sql_mode.label}"))
         hints.append(KeyHint("g", "generate sql"))
+        if self._focused_cell_is_expandable():
+            hints.append(KeyHint("w", "expand cell"))
         hints.append(KeyHint("^c", f"copy {self._selection_label()} ({self._copy_format})"))
         if writable:
             hints.extend(
@@ -1488,6 +1558,91 @@ class TableEditorScreen(AppScreen):
             verdict = "read/write"
         pending = "" if self._changes is None or self._changes.is_empty else " · pending"
         return f"{summary.ref} · {status_text(self._window)} · {verdict}{pending}"
+
+    # -- connection loss (FR-10) --------------------------------------------
+
+    def _handle_connection_lost(self, error: Exception) -> None:
+        """Offer a reconnect, keeping every staged change (FR-10).
+
+        The staging area is **never** cleared here. It is the only copy of the user's
+        unsaved work: the rows behind it are gone with the connection, so discarding it
+        would lose edits that cannot be reconstructed, and an Apply that fails this way
+        has written nothing (the transaction rolled back). Refreshing after the
+        reconnect re-reads the rows and re-attaches the staged changes on top.
+
+        What the user is told matters as much as what is preserved: the grid goes
+        visibly stale rather than quietly showing yesterday's rows as if they were live.
+        """
+        changes = self._changes
+        staged = changes.summary if changes is not None and not changes.is_empty else ""
+        session = self.connection.session
+        target = session.label if session else "the server"
+        message = f"the connection to {target} was lost"
+        detail = (
+            f"{message}.\n\nYour staged changes are safe and still here"
+            f"{f' ({staged})' if staged else ''} — reconnect to continue."
+        )
+        self._connection_lost = True
+        self.status.show_message(f"{message} — staged changes preserved", level="error")
+        self.push(
+            ConfirmScreen(
+                detail,
+                title="Connection lost",
+            ),
+            self._on_reconnect_answered,
+        )
+
+    def _on_reconnect_answered(self, confirmed: bool | None) -> None:
+        """Reconnect when the user accepts; otherwise stay put with the work kept."""
+        self._connection_lost = False
+        if not confirmed:
+            self.report_warning(
+                "not reconnected — your staged changes are kept; press esc and reconnect "
+                "from the connection list when you are ready"
+            )
+            return
+        self.reconnect()
+
+    def reconnect(self) -> None:
+        """Re-establish the session with the same profile, then re-read the table.
+
+        Reloading the metadata and rows afterwards is what re-attaches the grid to the
+        live data while the staging area keeps the user's pending changes layered on
+        top — the two are separate, which is why the work survives the round trip.
+        """
+        profile_name = self.connection.session.profile_name if self.connection.session else None
+        if profile_name is None:
+            self.report_error("cannot reconnect: the session is gone", title="Reconnect")
+            return
+        try:
+            profile = self.connection.get_profile(profile_name)
+        except Exception as exc:
+            self.report_error(f"cannot reconnect: {exc}", title="Reconnect")
+            return
+
+        async def reconnect_worker() -> None:
+            try:
+                await self.connection.connect(profile)
+            except Exception as exc:
+                self.report_error(f"reconnect failed: {exc}", title="Reconnect")
+                return
+            # The old cache describes a dead session, so it goes.
+            self.services.catalog.invalidate()
+            live = self.connection.session
+            self.status.show_message(f"reconnected to {live.label if live else profile.name}")
+            self.load_metadata()  # re-read rows; staging is preserved by ChangeService
+
+        self.run_worker(
+            reconnect_worker(),
+            name="reconnect",
+            group=self.WORKER_GROUP,
+            exit_on_error=False,
+        )
+
+    @property
+    def connection_lost(self) -> bool:
+        """Whether the session dropped while this table was open (FR-10)."""
+        return self._connection_lost
 
     def _show_disconnected(self) -> None:
         """Reconnect path instead of an empty grid when the session is gone (FR-10)."""

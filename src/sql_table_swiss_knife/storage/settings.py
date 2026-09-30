@@ -72,6 +72,11 @@ class Settings:
     #: Upper bound on pasted rows; a bigger block is refused with a message rather
     #: than staging thousands of rows by accident.
     paste_max_rows: int = 5000
+    #: M8 safety: permit writes to a table with no primary/unique key. Off by default —
+    #: an UPDATE or DELETE that cannot be scoped to one row is the single most
+    #: destructive mistake this tool could make, so it takes a deliberate opt-in. The
+    #: policy's refusal message points here, which is why the key has to exist.
+    allow_keyless_writes: bool = False
 
     def __post_init__(self) -> None:
         if not self.theme.strip():

@@ -516,3 +516,53 @@ def test_a_delete_error_has_no_guessed_column() -> None:
 
     assert mapped.column is None
     assert mapped.row_key == (("Code", "DE"),)
+
+
+# -- rebind (a reload must not cost the user their work) --------------------
+
+#: The row these tests edit; the key is the primary key, column by column.
+COUNTRY_ROW: dict[str, object] = {"Code": "DE", "Name": "Germany"}
+
+
+
+
+async def test_rebinding_keeps_the_staged_changes(tmp_path: Path) -> None:
+    """FR-10: reconnecting re-reads the rows; the pending edits must ride on top."""
+    changes, _provider = await _service(tmp_path)
+    changes.edit_cell((("Code", "DE"),), "Name", "Germany (edited)", COUNTRY_ROW)
+
+    assert changes.rebind(COUNTRY) is True
+    assert changes.is_empty is False
+    assert len(changes.updates()) == 1
+
+
+async def test_rebinding_adopts_the_new_metadata(tmp_path: Path) -> None:
+    """The refreshed table is what the Apply rules and identity checks must use."""
+    changes, _provider = await _service(tmp_path)
+    wider = Table(
+        schema="dbo",
+        name="Country",
+        kind=TableKind.BASE_TABLE,
+        columns=(*COUNTRY_COLUMNS, Column("Extra", 9, "int", None, None, 0, False, None, False)),
+        primary_key=PrimaryKey("PK_Country", ("Code",)),
+    )
+    assert changes.rebind(wider) is True
+    assert changes.table is wider
+    assert [column.name for column in changes.table.columns][-1] == "Extra"
+
+
+async def test_rebinding_a_different_table_is_refused(tmp_path: Path) -> None:
+    """Carrying edits across to another table would write them to the wrong rows."""
+    changes, _provider = await _service(tmp_path)
+    changes.edit_cell((("Code", "DE"),), "Name", "Germany (edited)", COUNTRY_ROW)
+
+    other = Table(
+        schema="dbo",
+        name="Region",
+        kind=TableKind.BASE_TABLE,
+        columns=COUNTRY_COLUMNS,
+        primary_key=PrimaryKey("PK_Country", ("Code",)),
+    )
+    assert changes.rebind(other) is False
+    # The caller rebuilds on a refusal, so the service must not pretend it moved.
+    assert changes.table is COUNTRY

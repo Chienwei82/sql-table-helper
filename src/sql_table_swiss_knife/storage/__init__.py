@@ -5,7 +5,13 @@ All files live in the platformdirs config directory and honour the
 """
 
 from .audit import AuditEntry, AuditLog, AuditLogError, assert_no_credentials
-from .paths import audit_log_path, config_dir, profiles_path, settings_path
+from .paths import (
+    audit_log_path,
+    config_dir,
+    keybindings_path,
+    profiles_path,
+    settings_path,
+)
 from .profiles import ProfileError, ProfileStore
 from .secrets import (
     EphemeralSecretStore,
@@ -35,6 +41,7 @@ __all__ = [
     "audit_log_path",
     "config_dir",
     "default_secret_store",
+    "keybindings_path",
     "profiles_path",
     "resolve_password",
     "secret_ref_for",

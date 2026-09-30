@@ -8,8 +8,11 @@ from platformdirs import user_config_path
 __all__ = [
     "APP_NAME",
     "CONFIG_DIR_ENV",
+    "KEYBINDINGS_ENV",
+    "KEYBINDINGS_FILENAME",
     "audit_log_path",
     "config_dir",
+    "keybindings_path",
     "profiles_path",
     "settings_path",
 ]
@@ -19,6 +22,12 @@ APP_NAME = "sql-table-swiss-knife"
 
 #: Environment variable overriding the config directory (used by tests and portable setups).
 CONFIG_DIR_ENV = "SWISSKNIFE_CONFIG_DIR"
+
+#: Environment variable overriding just the keybindings file (M8, NFR-6).
+KEYBINDINGS_ENV = "SWISSKNIFE_KEYBINDINGS"
+
+#: The keybindings file name inside the config directory.
+KEYBINDINGS_FILENAME = "keybindings.toml"
 
 
 def config_dir() -> Path:
@@ -46,3 +55,15 @@ def audit_log_path() -> Path:
     *which profile* wrote to which server, which is user data, not machine state.
     """
     return config_dir() / "audit.log.jsonl"
+
+
+def keybindings_path() -> Path:
+    """Path of the user keybinding overrides (``keybindings.toml``; M8, NFR-6).
+
+    The env override points at a *file* rather than a directory, because the useful case
+    is a checked-in keymap that a team shares, not a second config directory.
+    """
+    override = os.environ.get(KEYBINDINGS_ENV)
+    if override:
+        return Path(override).expanduser()
+    return config_dir() / KEYBINDINGS_FILENAME

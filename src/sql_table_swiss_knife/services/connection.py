@@ -20,6 +20,7 @@ __all__ = [
     "ConnectionState",
     "SessionInfo",
     "duplicate_profile",
+    "is_connection_lost",
 ]
 
 
@@ -310,3 +311,57 @@ async def _probe(
         "database_name": current,
         "latency_ms": int((time.perf_counter() - started) * 1000),
     }
+
+
+#: Substrings that mark a provider error as "the link went away" rather than
+#: "the database said no". Matching on the message is the only handle available: the
+#: drivers report a dropped TCP connection, a closed handle and a login timeout with
+#: three different exception classes and no common "is this fatal" flag.
+_CONNECTION_LOST_MARKERS: tuple[str, ...] = (
+    "connection was terminated",
+    "connection is busy",
+    "no connection",
+    "not connected",
+    "server was not found",
+    "communications link failure",  # the exact ODBC wording, plural
+    "connection reset",
+    "broken pipe",
+    "connection timeout",
+    "login timeout",
+    "08001",  # SQLSTATE: client unable to establish connection
+    "08s01",  # SQLSTATE: communication link failure
+    "hyt00",  # ODBC timeout
+    "hyt01",  # ODBC connection timeout
+    "08s02",  # SQLSTATE: connection name in use
+    "invalid connection",
+    "socket",
+)
+
+
+#: Exception types that *are* a lost connection regardless of their message. A broken
+#: pipe or a reset socket says so by its very type, and a driver that wraps it in a
+#: terse message would otherwise hide the one unambiguous signal available.
+_CONNECTION_LOST_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionResetError,
+    BrokenPipeError,
+    ConnectionAbortedError,
+)
+
+
+def is_connection_lost(error: BaseException | str) -> bool:
+    """Whether ``error`` means the session is gone, rather than the query failing.
+
+    This distinction decides the whole shape of the recovery: a constraint violation
+    leaves the session usable and the user should fix a cell, whereas a dropped
+    connection means every subsequent call will fail too and the only useful action is
+    to reconnect. Misreading the second as the first leaves the user editing into a
+    void; misreading the first as the second discards their work for nothing.
+
+    Two signals, in order: an unambiguous exception type, then a marker in the message.
+    The message check is one-directional — only a known marker counts — so an
+    unrecognised error stays an ordinary query failure, which is the recoverable one.
+    """
+    if isinstance(error, _CONNECTION_LOST_TYPES):
+        return True
+    text = str(error).lower()
+    return any(marker in text for marker in _CONNECTION_LOST_MARKERS)

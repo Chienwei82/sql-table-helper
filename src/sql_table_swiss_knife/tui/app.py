@@ -7,6 +7,7 @@ own. Themes are registered here, switched at runtime with ``ctrl+t`` and persist
 """
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, ClassVar
 
 from textual.app import App
@@ -30,9 +31,11 @@ from ..storage import (
     Settings,
     SettingsError,
     SettingsStore,
+    keybindings_path,
 )
 from .commands import ActionProvider
-from .screens import ConnectionsScreen
+from .keymap import Keymap, load_keymap, write_template
+from .screens import ConnectionsScreen, HelpScreen
 from .theme import SEMANTIC_ROLES, THEMES, load_theme, next_theme, register_themes
 
 __all__ = ["AppServices", "SwissKnifeApp"]
@@ -111,6 +114,7 @@ class SwissKnifeApp(App[None]):
         initial_theme: str | None = None,
         read_only: bool = False,
         audit_log: AuditLog | None = None,
+        keybindings: Path | None = None,
     ) -> None:
         """Create the app, wiring up services.
 
@@ -123,12 +127,20 @@ class SwissKnifeApp(App[None]):
             read_only: ``--read-only``: the session refuses writes and the toggle is
                 locked, so the posture is the one the process was started in.
             audit_log: Apply audit log override (tests write to a temp file).
+            keybindings: ``keybindings.toml`` override (tests / portable setups).
         """
         super().__init__()
         self.settings_store = settings if settings is not None else SettingsStore()
         self._settings: Settings = self._load_settings()
         self._settings_error: str | None = None
         self._read_only_requested = read_only
+        # A commented template is written next to the other config files the first time
+        # the app runs, so the keybinding format is discoverable without a manual. A
+        # user's edits are never overwritten: write_template returns early if the file
+        # exists, so this is a no-op on every run after the first.
+        keymap_file = keybindings if keybindings is not None else keybindings_path()
+        write_template(keymap_file)
+        self.keymap: Keymap = load_keymap(keymap_file)
         self.audit_log = audit_log if audit_log is not None else AuditLog()
         # The posture a profile opens with is resolved on connect (it depends on the
         # profile's environment); this is the starting point until then.
@@ -136,6 +148,7 @@ class SwissKnifeApp(App[None]):
             forced_read_only=read_only,
             read_only=read_only,
             delete_confirm_threshold=self._settings.delete_confirm_threshold,
+            allow_keyless_writes=self._settings.allow_keyless_writes,
         )
         self.connection = ConnectionService(
             profiles=profiles,
@@ -277,8 +290,13 @@ class SwissKnifeApp(App[None]):
         self._refresh_chrome()
 
     def action_show_help(self) -> None:
-        """Show the key-binding reference overlay (NFR-6)."""
-        self.push_screen("help")
+        """Show the key-binding reference (NFR-6, M8).
+
+        Our own screen rather than Textual's built-in help, because it is rendered
+        from the same registry the footer and the palette read and it carries the
+        safety summary — the built-in one lists bindings and nothing else.
+        """
+        self.push_screen(HelpScreen(self.keymap))
 
     def action_next_theme(self) -> None:
         """Cycle to the next theme and remember the choice (FR-3.7)."""

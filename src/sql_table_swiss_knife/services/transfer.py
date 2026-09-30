@@ -13,7 +13,6 @@ the same :func:`~services.clipboard.encode_block` the clipboard uses, so a CSV o
 a TSV in the clipboard cannot disagree about how a NULL or a date is written.
 """
 
-import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -116,24 +115,3 @@ def read_block(path: Path, *, known_columns: Sequence[str] = ()) -> ClipboardBlo
     # The format was sniffed from the content by parse_block itself; the suffix only tells
     # the *writer* what to produce, so nothing here needs to override it.
     return parse_block(text, known_columns=known_columns)
-
-
-def looks_like_json(path: Path, sample: str = "") -> bool:
-    """Whether a file should be read as JSON — used when the suffix is unknown."""
-    if suffix_format(path) == "json":
-        return True
-    return sample.lstrip()[:1] in {"[", "{"}
-
-
-def describe_export(path: Path, row_count: int, fmt: str) -> str:
-    """``wrote 5 rows to /tmp/x.csv as csv`` — the status line after an export."""
-    return f"exported {row_count} row(s) to {path} as {fmt}"
-
-
-def json_preview(text: str) -> str:
-    """Validate and pretty-print a JSON payload (used by the import dialog's hint)."""
-    try:
-        document = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise TransferError(f"invalid JSON: {exc}") from exc
-    return json.dumps(document, indent=2, ensure_ascii=False)
