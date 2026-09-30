@@ -327,6 +327,7 @@ def test_table_summaries() -> None:
             "has_primary_key": 1,
             "approximate_rows": 3,
             "has_triggers": 0,
+            "has_foreign_keys": 1,
         },
         {
             "schema_name": "dbo",
@@ -352,8 +353,10 @@ def test_table_summaries() -> None:
     assert summaries[0].has_primary_key is True
     assert summaries[0].approximate_row_count == 3
     assert summaries[0].has_triggers is False
+    assert summaries[0].has_foreign_keys is True  # drives the 🔗 badge in the picker
     assert summaries[1].kind is TableKind.VIEW
     assert summaries[1].has_triggers is True
+    assert summaries[1].has_foreign_keys is False  # absent column -> False, never None
 
 
 def test_object_kind() -> None:

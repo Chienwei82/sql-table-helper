@@ -215,7 +215,11 @@ SELECT s.name AS schema_name,
        ISNULL(rp.row_count, 0) AS approximate_rows,
        CASE WHEN EXISTS (SELECT 1
                            FROM sys.triggers AS t
-                          WHERE t.parent_id = o.object_id) THEN 1 ELSE 0 END AS has_triggers
+                          WHERE t.parent_id = o.object_id) THEN 1 ELSE 0 END AS has_triggers,
+       CASE WHEN EXISTS (SELECT 1
+                           FROM sys.foreign_keys AS fk
+                          WHERE fk.parent_object_id = o.object_id)
+           THEN 1 ELSE 0 END AS has_foreign_keys
   FROM sys.objects AS o
   JOIN sys.schemas AS s ON s.schema_id = o.schema_id
   LEFT JOIN (SELECT object_id, SUM(row_count) AS row_count
@@ -383,6 +387,7 @@ def table_summaries(rows: Iterable[Row]) -> list[TableSummary]:
                 has_primary_key=_as_bool(row.get("has_primary_key")),
                 approximate_row_count=row_count if row_count is not None else None,
                 has_triggers=_as_bool(row.get("has_triggers")),
+                has_foreign_keys=_as_bool(row.get("has_foreign_keys")),
             )
         )
     return summaries

@@ -571,12 +571,19 @@ driver = "ODBC Driver 18 for SQL Server"
 ### 9.1 Screen stack
 
 ```
-HomeScreen (connection manager)
-  → ProfileEditScreen (modal)         create/edit profile, Test Connection
+ConnectionsScreen (connection manager)
+  → ProfileEditScreen (modal)         create/edit profile, store the password
   → DatabasePickerScreen (modal)      if profile has no default database / change DB
-  → TablePickerScreen                 search-as-you-type + schema groups
-  → GridScreen (workspace)            the main editing surface
+  → ConfirmScreen (modal)             guard before a destructive action
+  → TableBrowserScreen                 search-as-you-type + schema groups + badges
+  → TableEditorScreen (workspace)      the main editing surface (M4: the grid itself)
 ```
+
+Every screen derives from `AppScreen`, which supplies the chrome (header, status line,
+context-sensitive key hints), the `push`/`pop` navigation helpers and the async contract:
+DB calls go through `run_task()`/screen-specific workers, the status line flips to a
+spinner before the first `await`, failures become a status-line error *and* a toast, and a
+per-screen generation counter drops stale worker results (FR-3.9).
 
 `GridScreen` layout (Textual CSS dock/panel):
 
@@ -632,9 +639,20 @@ tests.)
 - `DataGrid` wraps Textual's virtualized `DataTable` with a staged-value overlay model:
   display = staged ?? original; style class per state (FR-3.7) + glyph markers
   (`~` edited, `+` new, `×` delete, `🔒` read-only).
-- Themes are Textual CSS files in `tui/themes/`; 3 built-ins (`default-dark`, `high-contrast`,
-  `light`); user override loaded from the config dir. State colors are declared as CSS
-  variables per theme.
+- Themes live in `tui/theme.py` as Textual `Theme` objects — the mechanism this Textual
+  version offers for runtime switching (a theme *file* cannot be swapped at runtime).
+  Three built-ins: `default-dark`, `light`, `high-contrast`. `ctrl+t` cycles them, the
+  command palette lists them individually, and `settings.toml` remembers the choice
+  (DESIGN §13.2). The active theme adds a `-theme-<name>` class to the app, so
+  theme-specific CSS can still attach itself.
+- **Semantic palette:** each theme declares the *same* variable names —
+  `pk`, `fk`, `identity`, `computed`, `nullable`, `error`, `warning`, `pending` (plus
+  `muted`). Widgets reference the role (`$pk`), never a literal colour, so all three
+  themes stay consistent and `App.get_theme_variable_defaults()` keeps the stylesheet
+  parseable before a theme is active.
+- **Colour is never the only signal.** The table picker shows `🔑` primary key, `🔗` foreign
+  key, `⚡` trigger, `⚠` no primary key (read-only, S-4) and `👁` view; the grid adds
+  `~` edited, `+` new, `×` delete, `🔒` read-only. The glyph travels with the label.
 
 ### 9.5 Clipboard flows
 

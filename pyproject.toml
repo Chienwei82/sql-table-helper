@@ -25,6 +25,7 @@ dev = [
     "pytest-cov>=7",
     "ruff>=0.14",
     "mypy>=1.19",
+    "pytest-textual-snapshot>=1.0.0",
 ]
 
 [build-system]
@@ -60,6 +61,11 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--strict-config", "--strict-markers"]
+filterwarnings = [
+    # Upstream: pytest-textual-snapshot still calls datetime.utcnow() when it writes
+    # the HTML diff report. Nothing we can fix in this repo.
+    "ignore:datetime.datetime.utcnow\\(\\) is deprecated:DeprecationWarning",
+]
 markers = [
     "live: integration test needing a real SQL Server (tests/live/docker-compose.yml); skipped unless SWISSKNIFE_TEST_DB_URL is set",
 ]

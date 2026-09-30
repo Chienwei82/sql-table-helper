@@ -9,13 +9,14 @@ Legend: ✅ done · 🔶 partial · ⛔ not started · 🚧 in progress
 
 ## Current state
 
-**Milestone 2 complete** — the SQL Server provider's metadata and connection layer.
+**Milestone 3 complete** — the main UI structure: connection manager, searchable table
+picker, table editor placeholder, theming and the command palette.
 
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 | Project skeleton & quality gates | ✅ |
 | M2 | Provider abstraction & SQL Server read path | ✅ |
-| M3 | Connection manager & table picker | ⛔ |
+| M3 | Connection manager & table picker | ✅ |
 | M4 | Read-only grid & inspector | ⛔ |
 | M5 | Edit & stage changes | ⛔ |
 | M6 | Apply pipeline (transaction) | ⛔ |
@@ -23,7 +24,7 @@ Legend: ✅ done · 🔶 partial · ⛔ not started · 🚧 in progress
 | M8 | Hardening & release | ⛔ |
 
 Quality gates at the time of writing: `ruff check` ✅ · `ruff format --check` ✅ ·
-`mypy --strict` ✅ · `pytest` **206 passed, 14 skipped** (the skips are the live suite).
+`mypy --strict` ✅ · `pytest` **305 passed, 14 skipped** (the skips are the live suite).
 
 ---
 
@@ -135,24 +136,154 @@ uv run pytest -m live
 
 ---
 
+---
+
+## M3 — Main UI structure ✅
+
+### New layer: `services/`
+
+The TUI never touches a provider or a driver; it goes through two services that own the
+session (DESIGN §2).
+
+- `services/connection.py` — `ConnectionService`: profile CRUD, `test_connection`,
+  `connect`, `disconnect`, and the observable state the UI renders
+  (`state`, `session`, `last_error`, `is_busy`). One connection exists per session:
+  connecting again closes the previous one first. Passwords are read from the
+  `SecretStore` on demand and never persisted here (S-sec-1).
+  `duplicate_profile()` copies a profile under a new name **and a new secret reference**,
+  so a copy never shares the original credential slot.
+- `services/catalog.py` — `CatalogService`: databases, tables/views and table metadata,
+  cached per database and dropped on reconnect. The pure helpers
+  `filter_summaries()` (FR-2.1) and `group_by_schema()` (FR-2.2) do the searching and
+  grouping in memory, which is why typing in the picker never waits on the server.
+- `storage/settings.py` — `Settings`/`SettingsStore` for `settings.toml`
+  (DESIGN §13.2): atomic write, mode 0600, unknown keys ignored, typed values validated,
+  a malformed file reported instead of silently ignored.
+
+### Screens
+
+| Screen | What it does |
+|---|---|
+| `ConnectionsScreen` | profile list with add / edit / duplicate / delete / test / connect, and an empty state that explains itself |
+| `ProfileEditScreen` (modal) | the full profile form; the password field is write-only and goes straight to the keyring |
+| `DatabasePickerScreen` (modal) | FR-1.4: lists the server's databases, with a live filter; connects first if needed |
+| `ConfirmScreen` (modal) | yes/no guard before a destructive action |
+| `TableBrowserScreen` | search-as-you-type over a schema-grouped tree, `f5` collapses the groups |
+| `TableEditorScreen` | M3 placeholder: object identity, badges and the metadata read; the grid lands in M4 |
+
+All of them share `AppScreen`, which supplies the chrome (header / status line / key
+hints), the navigation helpers and — most importantly — the async contract:
+
+- **Every DB call runs in a Textual worker.** `run_task()` / `load_tables()` schedule a
+  coroutine, flip the status line to a spinner *before* the first `await`, and turn any
+  exception into a status-line error **and** a toast. The UI never blocks on a driver.
+- **Generation guard.** Each screen bumps a generation counter when its subject changes;
+  a worker result from an older generation is dropped instead of flashing stale data
+  (FR-3.9).
+- **Four explicit states.** `loading` (spinner) / `ready` / `error` / `disconnected`, kept
+  in sync between the header classes and the status line (DESIGN §9.3).
+
+### Layout & chrome
+
+- `AppHeader` — title on the left, connection identity and state on the right
+  (`● connected · localhost:1433/CatalogDB`, `◐ connecting…`, `✖ connection error`).
+- `StatusLine` — spinner plus the last outcome, styled with the theme's error/warning
+  roles.
+- `KeyHints` — a **context-sensitive** footer: the hints are recomputed from the screen's
+  state (empty profile list → "n new profile"; connected → "b change database"), so the
+  footer never advertises something that does not apply.
+
+### Table picker badges (FR-2.3)
+
+| Glyph | Meaning | Role in the palette |
+|---|---|---|
+| `🔑` | has a primary key | `$pk` |
+| `🔗` | has foreign keys | `$fk` |
+| `⚡` | has triggers | `$warning` |
+| `⚠` | **no** primary key → read-only rows (S-4) | `$warning` |
+| `👁` | view → read-only | `$nullable` |
+
+The glyph carries the meaning and the colour only reinforces it, so the rows read
+correctly in all three themes and for any colour-vision difference (FR-3.7).
+
+### Theming (FR-3.7)
+
+`tui/theme.py` defines three built-in themes — `default-dark`, `light`,
+`high-contrast` — each declaring the **same semantic palette**: `pk`, `fk`, `identity`,
+`computed`, `nullable`, `error`, `warning`, `pending`. Widgets reference roles
+(`$pk`, `$muted`), never literal colours. `ctrl+t` cycles the themes, the command palette
+lists them individually, and the choice is written to `settings.toml` and restored on the
+next start. A broken settings file falls back to the default with a warning toast instead
+of blocking startup.
+
+### Command palette (Ctrl+P)
+
+`tui/commands.py` plugs into Textual's palette with two content sources:
+
+- **the active screen's actions**, derived from its `BINDINGS` — so the palette, the
+  footer and the keyboard can never drift apart;
+- **app-wide actions** — switch theme (×3), help, disconnect, go to connections, quit.
+
+Textual's own fuzzy matcher ranks the hits, and coroutine actions are scheduled on the
+message pump instead of being silently dropped.
+
+### Domain change
+
+`TableSummary` gained `has_foreign_keys` (the `🔗` badge needs it): the mssql listing
+query now also checks `sys.foreign_keys`, and `Table.summary` propagates the trigger flag
+and the row estimate so the fake and real providers agree.
+
+### Tests
+
+| File | What it covers |
+|---|---|
+| `tests/unit/storage/test_settings.py` | defaults, validation, atomic 0600 write, forward compatibility |
+| `tests/unit/services/test_connection.py` | profile CRUD, connect/disconnect, session state, secret handling, error mapping |
+| `tests/unit/services/test_catalog.py` | listing + caching, plus the pure filter/group helpers |
+| `tests/unit/tui/test_badges.py` | badge rules and glyph-only rendering (no palette) |
+| `tests/unit/tui/test_theme.py` | the three themes, the shared semantic palette, persistence |
+| `tests/tui/test_connections.py` | Pilot: list, test, connect, duplicate, delete+confirm, profile form |
+| `tests/tui/test_table_browser.py` | Pilot: grouping, badges, filtering, navigation, F5, offline path |
+| `tests/tui/test_themes_and_palette.py` | Pilot: theme cycling + persistence, Ctrl+P content |
+| `tests/tui/test_snapshots.py` | **13 SVG snapshots** of every main screen, in all three themes |
+| `tests/tui/conftest.py` | fully injected app factory (temp stores, `FakeProvider`, sample catalog) |
+
+Every TUI test runs against `FakeProvider` with temporary profile/settings stores and an
+in-memory secret store: no database, no keyring, no touching the developer's config.
+
 ## Known gaps / follow-ups
 
 - **The live suite has not been executed against a real server yet** — this machine has no
   Docker and no `libodbc.so.2`, so `import pyodbc` fails and the live tests skip. They are
   written to run, but the first real run is still pending. The provider path *is* covered
   end-to-end by `tests/providers/test_mssql_provider.py` against a fake driver.
+- **The TUI has not been exercised against a real SQL Server** either: M3 was verified with
+  `FakeProvider` and snapshot tests only. The manual pass against the docker server
+  (connect → pick a database → browse tables → open one) is still outstanding.
 - `MssqlProvider.execute_changes()` raises `NotImplementedError` — the Apply pipeline is M6.
 - `MssqlProvider.fetch_rows()` ignores `FetchSpec.filters` and `sort` (M2 scope: verify
   introspection; filtering/sorting proper lands with the data service in M4).
-- `services/` layer (connection manager, catalog service) is still missing — M3.
+- **`services/` now exists (connection + catalog), but `data.py`, `changes.py`,
+  `preview.py` and `clipboard.py` do not** — they arrive with the grid (M4/M5) and the
+  apply pipeline (M6).
+- **User theme *files* are not supported yet**: the three built-ins are Textual `Theme`
+  objects (which is what the installed Textual version offers), and a fourth theme can be
+  added as another entry in `tui/theme.py`. Loading a `.tcss` theme from the config dir,
+  which DESIGN §9.4 mentions, is still open.
 - `infra/logging.py` (redacting filter + `user_message()`) is not written yet; the
   sanitizing helpers in `providers/mssql/` cover the M2 surfaces, but DESIGN §8.2's
   logging-level filter is still open.
 - `import-linter` (DESIGN §2 dependency rules) is not wired into CI yet.
 
-## Next milestone — M3: connection manager & table picker
+## Next milestone — M4: read-only grid & inspector
 
-- Home screen: profile list, create/edit/duplicate/delete, "Test connection".
-- Database picker.
-- Table picker: search-as-you-type, schema grouping, table/view badges, keyboard + mouse.
-- Verified against `FakeProvider` (Pilot tests) and manually against a real server.
+- `services/data.py`: fetch rows (limit, paging, deterministic order) and a metadata cache
+  shared with the table picker.
+- The grid widget itself: frozen headers, scrolling, selection, cell cursor, with the
+  three themes wired to the semantic palette (the `$identity`/`$computed`/`$read-only`
+  roles already exist).
+- `TableEditorScreen` grows into the workspace: `schema.table` in the header, the row
+  panel, the inspector (FR-6 table + column detail) and the status bar.
+- Status bar counts ("rows 1–1000 • more?") and the fetch-more action (FR-3.8, S-8).
+- Reuse the milestone's screenshot harness: add grid snapshots to
+  `tests/tui/test_snapshots.py` as soon as the widget exists.

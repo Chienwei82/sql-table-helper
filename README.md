@@ -5,9 +5,10 @@ that have no CRUD UI** — catalog/lookup tables. It stages edits in memory, sho
 SQL they will run (parameterized and copy-ready literal), and applies them in a single
 transaction. First target DBMS: Microsoft SQL Server.
 
-Status: **Milestone 2** — SQL Server connection profiles, the `sys.*` metadata read path,
-and a temporary CLI inspector. See [PROGRESS.md](PROGRESS.md) for the full status and
-[SPEC.md](SPEC.md) / [DESIGN.md](DESIGN.md) for requirements and design.
+Status: **Milestone 3** — the main UI: the connection manager, the searchable table
+picker, three switchable themes and a command palette. See [PROGRESS.md](PROGRESS.md) for
+the full status and [SPEC.md](SPEC.md) / [DESIGN.md](DESIGN.md) for requirements and
+design.
 
 > This project is managed with [**uv**](https://docs.astral.sh/uv/) — `uv sync`,
 > `uv add`, `uv run`. Do not `pip install` into the venv; there is no `requirements.txt`.
@@ -24,6 +25,39 @@ uv run mypy                 # strict type check
 uv run sql-table-swiss-knife --version
 uv run sql-table-swiss-knife   # launch the TUI (quit: ctrl+q)
 ```
+
+## Using the TUI
+
+| Key | Where | Action |
+|---|---|---|
+| `n` / `e` / `d` / `x` | connections | new / edit / duplicate / delete a profile |
+| `t` | connections | test the profile (no session left behind) |
+| `enter` | connections | connect — the database picker appears if the profile has no default |
+| `b` | connections | switch database on the live session |
+| `/` | tables | search-as-you-type over `schema.table` |
+| `f5` | tables | collapse/expand the schema groups |
+| `enter` | tables | open the selected table |
+| `ctrl+p` | anywhere | command palette (fuzzy search over the current screen's actions) |
+| `ctrl+t` | anywhere | cycle the theme (persisted in `settings.toml`) |
+| `esc` | anywhere | back one level |
+| `ctrl+q` | anywhere | quit (the connection is closed first) |
+
+Table rows carry glyph badges that survive every theme and colour-vision difference:
+`🔑` has a primary key, `🔗` has foreign keys, `⚡` has triggers, `⚠` has **no** primary
+key (rows are read-only, S-4) and `👁` is a view.
+
+## Themes
+
+Three built-ins — `default-dark`, `light` and `high-contrast` — switchable at runtime with
+`ctrl+t` or from the command palette, and the choice is persisted in `settings.toml`:
+
+```toml
+theme = "high-contrast"
+fetch_limit = 1000          # other settings from DESIGN §13.2 are read here too
+```
+
+Every theme declares the same *semantic* palette (`$pk`, `$fk`, `$identity`, `$computed`,
+`$nullable`, `$error`, `$warning`, `$pending`), so the UI never hard-codes a colour.
 
 ## Connection profiles
 
@@ -86,6 +120,12 @@ to be reworked or dropped once the TUI inspector (M4) exists.
 - `src/sql_table_swiss_knife/providers/` — `DatabaseProvider` + `SqlDialect` protocols,
   SQL generation, plugin registry, and `mssql/` (the SQL Server provider: connection
   string, error mapping, `sys.*` metadata)
-- `src/sql_table_swiss_knife/storage/` — `profiles.toml` (no secrets) + secret stores
-- `src/sql_table_swiss_knife/tui/` — Textual app
+- `src/sql_table_swiss_knife/services/` — the layer the TUI talks to: connection
+  lifecycle (`services/connection.py`) and catalog reads (`services/catalog.py`)
+- `src/sql_table_swiss_knife/storage/` — `profiles.toml` (no secrets), `settings.toml`
+  and the secret stores
+- `src/sql_table_swiss_knife/tui/` — Textual app: `screens/`, `widgets/`, `theme.py`
+  (themes) and `commands.py` (command palette)
+- `tests/tui/__snapshots__/` — SVG snapshot tests of the main screens
+  (regenerate with `uv run pytest tests/tui/test_snapshots.py --snapshot-update`)
 - `tests/live/docker-compose.yml` — sample SQL Server 2022

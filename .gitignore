@@ -10,3 +10,5 @@ dist/
 build/
 *.egg-info/
 uv.lock.bak
+# pytest-textual-snapshot writes this next to the repo root on failure
+snapshot_report.html

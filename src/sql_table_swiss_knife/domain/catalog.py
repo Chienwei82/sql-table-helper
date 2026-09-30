@@ -238,6 +238,8 @@ class TableSummary:
     has_primary_key: bool = False
     approximate_row_count: int | None = None  # cheap estimate; None if unknown/n/a
     has_triggers: bool = False
+    #: Outgoing foreign keys — drives the 🔗 badge in the table picker.
+    has_foreign_keys: bool = False
 
     def __post_init__(self) -> None:
         validate_identifier(self.schema, kind="schema name")
@@ -344,6 +346,9 @@ class Table:
             name=self.name,
             kind=self.kind,
             has_primary_key=self.primary_key is not None,
+            approximate_row_count=self.approximate_row_count,
+            has_triggers=bool(self.triggers),
+            has_foreign_keys=bool(self.foreign_keys),
         )
 
 

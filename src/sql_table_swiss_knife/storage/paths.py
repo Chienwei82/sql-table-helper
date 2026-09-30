@@ -5,7 +5,7 @@ from pathlib import Path
 
 from platformdirs import user_config_path
 
-__all__ = ["APP_NAME", "CONFIG_DIR_ENV", "config_dir", "profiles_path"]
+__all__ = ["APP_NAME", "CONFIG_DIR_ENV", "config_dir", "profiles_path", "settings_path"]
 
 #: Application name used for platformdirs locations and the OS keyring service.
 APP_NAME = "sql-table-swiss-knife"
@@ -25,3 +25,8 @@ def config_dir() -> Path:
 def profiles_path() -> Path:
     """Path of the connection-profile file (never contains secrets)."""
     return config_dir() / "profiles.toml"
+
+
+def settings_path() -> Path:
+    """Path of the user settings file (``settings.toml``; DESIGN §13.2)."""
+    return config_dir() / "settings.toml"

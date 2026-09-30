@@ -178,11 +178,15 @@ def test_view_is_never_updatable(country_table: Table) -> None:
 def test_table_rowversion_and_summary(country_table: Table) -> None:
     assert country_table.rowversion_column is not None
     assert country_table.rowversion_column.name == "RowVer"
+    # The summary carries everything the table picker badges need (FR-2.3).
     assert country_table.summary == TableSummary(
         schema="dbo",
         name="Country",
         kind=TableKind.BASE_TABLE,
         has_primary_key=True,
+        approximate_row_count=3,
+        has_triggers=True,
+        has_foreign_keys=False,
     )
     assert str(country_table.ref) == "dbo.Country"
     assert country_table.approximate_row_count == 3
