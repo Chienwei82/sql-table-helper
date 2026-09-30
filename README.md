@@ -1,22 +1,54 @@
 # sql-table-swiss-knife
 
-A Python 3.14 terminal (TUI) application for **viewing and editing rows of database tables
-that have no CRUD UI** — catalog/lookup tables. It stages edits in memory, shows the exact
-SQL they will run (parameterized and copy-ready literal), and applies them in a single
-transaction. First target DBMS: Microsoft SQL Server.
+**Edit catalog tables without writing SQL — and always see the SQL it runs.**
 
-Status: **Milestone 8 — hardening & release.** Staged edits with a live SQL preview,
-clipboard import/export, and now the safety layer: per-profile read-only (on by default
-for production), a red `PROD` / green `DEV` badge, an Apply dialog that states the counts
-and the affected tables and demands a typed word against production, a local audit log of
-every applied script, wide/long/binary cell handling, a reconnect prompt that keeps your
-staged work, an F1 help screen, and documentation & packaging. See
-[PROGRESS.md](PROGRESS.md) for the full status, [SPEC.md](SPEC.md) / [DESIGN.md](DESIGN.md)
-for requirements and design, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the layering
-and [docs/ADDING_A_PROVIDER.md](docs/ADDING_A_PROVIDER.md) to support another DBMS.
+A Python 3.14 terminal (TUI) application for **viewing and editing rows of database tables
+that have no CRUD UI** — status codes, type lists, parameter tables, feature flags. It
+stages edits in memory, shows the exact SQL they will run (parameterized and copy-ready
+literal), and applies them in a single transaction. First target DBMS: Microsoft SQL Server.
+
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
+[![TUI](https://img.shields.io/badge/TUI-Textual-2b6cb0.svg)](https://textual.textualize.io/)
+[![DBMS: SQL Server](https://img.shields.io/badge/DBMS-SQL%20Server-CC2929.svg)](https://learn.microsoft.com/sql/sql-server/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![status: beta](https://img.shields.io/badge/status-beta-orange.svg)](PROGRESS.md)
+
+### Who this is for
+
+If you maintain one of those tables today, you probably open `psql` or `sqlcmd` and type an
+`UPDATE` by hand — or you don't, and the table quietly drifts. This is the tool for
+maintaining it without the SQL.
+
+It is **not** a database IDE. There is no free-form SQL console, no DDL, no schema
+designer, no ORM. If you want those, use your database's own tooling — this is
+deliberately the small thing.
+
+### What it does
+
+- **Edits are staged, never immediate.** Nothing reaches the database until you Apply, and
+  Apply runs everything in one transaction — all of it, or none of it.
+- **The SQL is always on screen** (`F3`), both as sent and as a copy-ready literal script.
+  This is the point of the tool: you don't have to *write* SQL, but you can always *read*
+  it — and copy the script for a DBA to run out-of-band.
+- **Safe by default.** Read-only is on by default for production profiles; a red `PROD`
+  badge in the header; the Apply dialog states the counts and the affected tables and
+  demands a typed word against production; every Apply — committed, rolled back or
+  refused — is recorded in a local audit log.
+- **It refuses rather than guesses.** A table with no primary key is read-only, because an
+  `UPDATE` without a key is `WHERE 1=1` by accident.
+- **Awkward data is expected.** Wide tables scroll with the key column frozen; long text
+  opens full-screen; binary shows a hex dump; a dropped connection tells you your staged
+  work is safe instead of losing it.
 
 > This project is managed with [**uv**](https://docs.astral.sh/uv/) — `uv sync`,
 > `uv add`, `uv run`. Do not `pip install` into the venv; there is no `requirements.txt`.
+
+Status: **Milestone 8 — hardening & release.** Staged edits with a live SQL preview,
+clipboard import/export, safety layer, wide/long/binary cell handling, a reconnect prompt
+that keeps your staged work, an `F1` help screen, and packaging. See
+[PROGRESS.md](PROGRESS.md) for the full status, [SPEC.md](SPEC.md) / [DESIGN.md](DESIGN.md)
+for requirements and design, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the layering
+and [docs/ADDING_A_PROVIDER.md](docs/ADDING_A_PROVIDER.md) to support another DBMS.
 
 ## Screens
 
@@ -68,9 +100,14 @@ transaction guarantee, and a word that must be typed.
 ```bash
 uv tool install sql-table-swiss-knife     # from PyPI
 # or, from a checkout
+git clone https://github.com/Chienwei82/sql-table-helper.git
+cd sql-table-helper
 uv sync
 uv run sql-table-swiss-knife
 ```
+
+Requires Python 3.14. To connect you also need an **ODBC driver manager** and the
+**Microsoft ODBC Driver 18** (17 works too) — on Linux, `unixODBC` plus the driver.
 
 A **single-file** build is also supported for locked-down machines and for dropping the
 app onto a server without touching its Python:
@@ -90,7 +127,7 @@ uv sync                     # install runtime + dev deps (Python 3.14)
 uv run pytest               # unit + provider + TUI tests (live tests skip themselves)
 uv run pytest -m live       # integration tests (need the docker server, see below)
 uv run ruff check .         # lint
-uv run ruff format --check .# format check
+uv run ruff format --check .  # format check
 uv run mypy                 # strict type check
 uv run sql-table-swiss-knife --version
 uv run sql-table-swiss-knife   # launch the TUI (quit: ctrl+q)
@@ -508,8 +545,12 @@ Stated plainly, because a list of them is more useful than a claim of completene
 - **The keybinding drift check covers the built-in screens.** A key rebound by a user is
   validated, not verified against the widgets, so a custom binding can still shadow a
   built-in one.
-- **Excel `.xlsx` import is not supported** (CSV/JSON file import is) — out of scope per
-  SPEC §5.
+- **Excel `.xlsx` import is not supported.** CSV and JSON file import are, through the
+  same parser and preview as a clipboard paste. `.xlsx` itself is not read — CSV exported
+  from Excel works.
+- **File-based import/export is built but SPEC §2.2 still lists it as out of scope.** The
+  code and the spec disagree; the spec has not been amended yet. Treat the README as
+  current.
 - **`inspect` is a temporary developer command** and will be reworked or dropped.
 
 ## Documentation
@@ -521,6 +562,29 @@ Stated plainly, because a list of them is more useful than a claim of completene
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | layering, the safety model, the concurrency story, testing strategy |
 | [docs/ADDING_A_PROVIDER.md](docs/ADDING_A_PROVIDER.md) | step-by-step guide to supporting another DBMS |
 | [PROGRESS.md](PROGRESS.md) | milestone status, coverage, known gaps |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | how to contribute: setup, the five gates, the rules that matter |
+| [SECURITY.md](SECURITY.md) | reporting a vulnerability, and what the app does and does not protect |
+| [AGENTS.md](AGENTS.md) | **instructions for AI coding agents** working in this repo |
+
+## Using AI coding agents
+
+[AGENTS.md](AGENTS.md) is the authoritative brief for an agent working in this repository:
+the architecture, the five quality gates, the rules that are mechanically enforced, and
+the conventions. It is a single source of truth that the per-tool files delegate to, so
+the rules cannot drift apart:
+
+| File | Tool |
+|---|---|
+| [AGENTS.md](AGENTS.md) | the brief itself — read this |
+| [CLAUDE.md](CLAUDE.md) | Claude Code (imports `AGENTS.md`) |
+| [GEMINI.md](GEMINI.md) | Gemini CLI |
+| [.cursorrules](.cursorrules) | Cursor |
+| [.github/copilot-instructions.md](.github/copilot-instructions.md) | GitHub Copilot |
+
+The short version: `uv` only; run `ruff check`, `ruff format --check`, `mypy`,
+`lint-imports` and `pytest` before claiming you are done; never let `services/` import
+`tui/`; keep decisions in pure functions; and every fix needs a test that fails without
+it.
 
 ## License
 
