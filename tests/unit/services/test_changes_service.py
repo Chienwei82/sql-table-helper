@@ -524,8 +524,6 @@ def test_a_delete_error_has_no_guessed_column() -> None:
 COUNTRY_ROW: dict[str, object] = {"Code": "DE", "Name": "Germany"}
 
 
-
-
 async def test_rebinding_keeps_the_staged_changes(tmp_path: Path) -> None:
     """FR-10: reconnecting re-reads the rows; the pending edits must ride on top."""
     changes, _provider = await _service(tmp_path)
