@@ -590,3 +590,15 @@ it.
 
 MIT — see [LICENSE](LICENSE).
 
+This project was written with AI coding assistants (Claude Code and similar). The MIT
+license above is the standard, permissive choice and applies to the code as it stands; no
+separate "AI" licence is used, because no OSI-approved one exists and inventing a bespoke
+licence would only make the code harder to reuse.
+
+On authorship: copyright in AI-assisted work is a genuinely unsettled area of law, and no
+licence can resolve it. Practically, what matters is that the licence is a standard one so
+that anyone who wants to use this can, and that the copyright line names a real person who
+can grant permission. `Copyright (c) 2026 Chienwei82` does both. If you are an
+organisation rather than an individual, set the line to your organisation's legal name
+before publishing.
+
