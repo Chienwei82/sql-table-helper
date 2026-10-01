@@ -5,8 +5,8 @@ page size, the deterministic order (identity columns when the table has a usable
 the *append* semantics behind "fetch more". Keeping the paging state in one place means the
 status bar, the grid and the tests all agree on what "rows 1-2000 of 12345" means.
 
-Only reads here. Staging (FR-7) and Apply (M6) belong to ``services/changes.py``, which does
-not exist yet — this milestone is deliberately read-only.
+Only reads here. Staging (FR-7) and Apply (M6) belong to ``services/changes.py``, which
+cannot reach a database — so this module is the only place that fetches rows.
 """
 
 from dataclasses import dataclass, field, replace
@@ -140,9 +140,11 @@ class DataService:
     async def fetch_more(self, window: RowWindow) -> RowWindow:
         """Fetch the next page and append it to ``window`` (the "fetch more" action).
 
-        The previous page's sort order is reused so the appended rows line up with what the
-        user is already looking at; asking for more when there is nothing more returns an
-        equivalent window instead of raising.
+        The previous page's sort order *and filters* are reused: without the filters the
+        appended page would be unfiltered while ``window.filters`` still claimed the whole
+        window was filtered, so the status bar would describe a window it was not showing.
+        Asking for more when there is nothing more returns an equivalent window instead of
+        raising.
         """
         if not window.has_more:
             return window
@@ -152,6 +154,7 @@ class DataService:
             limit=max(window.limit, DEFAULT_LIMIT),
             offset=offset,
             sort=window.sort,
+            filters=window.filters,
         )
         return replace(
             window,

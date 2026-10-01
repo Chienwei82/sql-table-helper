@@ -13,8 +13,10 @@ from sql_table_swiss_knife.domain import (
     AuthMode,
     Column,
     ConnectionProfile,
+    FilterOp,
     PrimaryKey,
     Row,
+    RowFilter,
     SortKey,
     Table,
     TableKind,
@@ -136,6 +138,26 @@ async def test_fetch_more_on_a_complete_window_is_a_no_op(tmp_path: Path) -> Non
     complete = await data.fetch(KEYLESS, limit=10)
 
     assert await data.fetch_more(complete) is complete
+
+
+async def test_fetch_more_keeps_the_active_filter(tmp_path: Path) -> None:
+    """The appended page must be filtered like the first one.
+
+    Without passing the filters through, the second page came back unfiltered while
+    ``window.filters`` still claimed the whole window was filtered — so the status bar
+    described a window the user was not looking at.
+    """
+    data = await _connected(tmp_path, (COUNTRY,))
+    # "%r%" matches Germany and France but not Japan: two rows, so there is a second page.
+    filters = (RowFilter("Name", FilterOp.LIKE, "%r%"),)
+    first = await data.fetch(COUNTRY, limit=1, filters=filters)
+    assert [row["Code"] for row in first.rows] == ["DE"]
+    assert first.has_more is True
+
+    grown = await data.fetch_more(first)
+
+    assert [row["Code"] for row in grown.rows] == ["DE", "FR"]
+    assert grown.filters == filters
 
 
 async def test_fetch_requires_a_connection(tmp_path: Path) -> None:

@@ -151,8 +151,6 @@ class TableEditorScreen(AppScreen):
         self._inspector_collapsed = False
         self._view = GridView()
         self._changes: ChangeService | None = None
-        #: Rows staged as new, in staging order: the grid shows them after the fetched ones.
-        self._new_rows: dict[RowKey, dict[str, object]] = {}
         #: Server-generated keys of the most recent Apply, so the grid can re-key rows.
         self._applied_keys: tuple[RowKey, ...] = ()
         # -- clipboard (FR-4) --
@@ -241,7 +239,7 @@ class TableEditorScreen(AppScreen):
                     await data.fetch(
                         table,
                         sort=view.sort_for(table),
-                        filters=view.predicates(),
+                        filters=view.predicates(self.connection.provider().dialect),
                     )
                     if fetch_rows
                     else None
@@ -271,19 +269,10 @@ class TableEditorScreen(AppScreen):
         generation = self.generation
         data: DataService = self.services.data
         window = self._window
-        table = self._table
 
         async def work() -> None:
             try:
-                if table is None:
-                    return
-                grown = await data.fetch(
-                    table,
-                    limit=max(window.limit, 1000),
-                    offset=window.count,
-                    sort=window.sort,
-                    filters=window.filters,
-                )
+                grown = await data.fetch_more(window)
             except Exception as exc:
                 if generation == self.generation:
                     if is_connection_lost(exc):
@@ -331,13 +320,13 @@ class TableEditorScreen(AppScreen):
         if self._table is None or self._window is None:
             return
         rows = [*self._window.rows, *self._staged_rows()]
-        keys = [*self._window_keys(), *self._new_rows.keys()]
+        keys = [*self._window_keys(), *self._new_rows()]
         grid.load(self._table, rows, hidden=self._view.hidden, keys=keys)
         self._refresh_overlay()
 
     def _staged_rows(self) -> list[Row]:
         """The staged INSERT rows, as grid rows carrying their staged values."""
-        return [Row(values) for values in self._new_rows.values()]
+        return [Row(values) for values in self._new_rows().values()]
 
     def _window_keys(self) -> list[RowKey | None]:
         """The identities of the fetched rows, in the grid's order."""
@@ -353,9 +342,8 @@ class TableEditorScreen(AppScreen):
             return
         statuses: dict[tuple[RowKey | None, str], str] = {}
         values: dict[tuple[RowKey | None, str], object] = {}
-        for row_index in range(len(grid.fetched_rows)):
+        for row_index in range(grid.row_count):
             key = grid.key_at(row_index)
-            row = grid.fetched_rows[row_index]
             for column in grid.visible_columns:
                 status = (
                     changes.status_for(key, column.name)
@@ -363,10 +351,13 @@ class TableEditorScreen(AppScreen):
                     else (CellStatus.UNCHANGED)
                 )
                 statuses[(key, column.name)] = _STATUS_CLASS[status]
-                if status is CellStatus.MODIFIED and key is not None:
-                    values[(key, column.name)] = changes.display_values(key, row.values).get(
-                        column.name
-                    )
+                # A new row's filled-in cells carry the value that will be inserted, so the
+                # overlay must publish them; only MODIFIED was published, which left a
+                # filled-in new row showing NULL.
+                if status in (CellStatus.MODIFIED, CellStatus.NEW) and key is not None:
+                    values[(key, column.name)] = changes.display_values(
+                        key, grid.row_values(row_index)
+                    ).get(column.name)
         grid.apply_overlay(statuses, values)
 
     def _show_warning_summary(self, warnings: tuple[Warning, ...]) -> None:
@@ -443,11 +434,15 @@ class TableEditorScreen(AppScreen):
         return dict(staged.change.before)
 
     def _display_values(self, row_index: int) -> dict[str, object]:
-        """What the grid shows for a row: staged values over the fetched ones."""
+        """What the grid shows for a row: staged values over the fetched ones.
+
+        Covers staged new rows too, which live past the fetched window, so that a
+        filled-in new row renders its values rather than ``NULL``.
+        """
         grid = self.query_one("#editor-grid", DataGrid)
-        if not 0 <= row_index < len(grid.fetched_rows):
+        if not 0 <= row_index < grid.row_count:
             return {}
-        values = dict(grid.fetched_rows[row_index].values)
+        values = dict(grid.row_values(row_index))
         key = grid.key_at(row_index)
         if self._changes is not None and key is not None:
             staged = self._changes.find(key)
@@ -628,8 +623,7 @@ class TableEditorScreen(AppScreen):
         changes = self._changes
         if changes is None or not self._require_writable():
             return
-        key = changes.insert_row()
-        self._new_rows[key] = {}
+        changes.insert_row()
         self._render_rows()
         # Put the cursor on the new row: staging a row is always followed by filling it in.
         grid = self.query_one("#editor-grid", DataGrid)
@@ -643,9 +637,7 @@ class TableEditorScreen(AppScreen):
         key, _, row_index, _ = self._cursor()
         if changes is None or key is None or not self._require_writable():
             return
-        copy = changes.duplicate_row(key, self._display_values(row_index))
-        staged = changes.find(copy)
-        self._new_rows[copy] = dict(staged.change.after or {}) if staged is not None else {}
+        changes.duplicate_row(key, self._display_values(row_index))
         self._render_rows()
         grid = self.query_one("#editor-grid", DataGrid)
         grid.focus()
@@ -660,7 +652,6 @@ class TableEditorScreen(AppScreen):
             return
         if grid_is_new(self, row_index):
             # Nothing was ever written, so "deleting" just forgets the staged row.
-            self._new_rows.pop(key, None)
             changes.revert(key)
         else:
             changes.delete_row(key, self._original_values(row_index))
@@ -670,7 +661,7 @@ class TableEditorScreen(AppScreen):
     def action_undo(self) -> None:
         """Undo the last staging action (``ctrl+z``)."""
         if self._changes is not None and self._changes.undo():
-            self._sync_new_rows()
+            self._render_rows()
             self._after_stage(True, "undone")
         else:
             self.status.show_message("nothing to undo")
@@ -678,18 +669,18 @@ class TableEditorScreen(AppScreen):
     def action_redo(self) -> None:
         """Redo the last undone staging action (``ctrl+shift+z``)."""
         if self._changes is not None and self._changes.redo():
-            self._sync_new_rows()
+            self._render_rows()
             self._after_stage(True, "redone")
         else:
             self.status.show_message("nothing to redo")
 
     def action_revert_row(self) -> None:
         """Drop the staged changes of the focused row (``ctrl+u``)."""
-        key, column, row_index, _ = self._cursor()
+        key, column, _, _ = self._cursor()
         if self._changes is None or key is None or column is None:
             return
-        if grid_is_new(self, row_index):
-            self._new_rows.pop(key, None)
+        # For a staged new row, reverting the buffer is what removes it from the grid,
+        # because the grid's new rows are derived from the buffer.
         if self._changes.revert(key):
             self._render_rows()
             self._after_stage(True, f"row reverted: {column.name}")
@@ -714,7 +705,6 @@ class TableEditorScreen(AppScreen):
         if not confirmed or self._changes is None:
             return
         self._changes.revert_all()
-        self._new_rows.clear()
         self._render_rows()
         self._after_stage(True, "all staged changes discarded")
 
@@ -740,15 +730,18 @@ class TableEditorScreen(AppScreen):
         """Whether this screen currently refuses writes (S-9)."""
         return self.services.safety.read_only
 
-    def _sync_new_rows(self) -> None:
-        """Reconcile the staged-insert list after an undo/redo (a row may reappear)."""
-        changes = self._changes
-        if changes is None:
-            self._new_rows.clear()
-            return
-        self._new_rows = {
+    def _new_rows(self) -> dict[RowKey, dict[str, object]]:
+        """The staged INSERT rows and their staged values, in staging order.
+
+        Derived from the change buffer rather than tracked alongside it: a second copy
+        drifted out of step with the buffer (a filled-in new row still rendered ``NULL``,
+        and a refused rebind left phantom rows), so there is now one source of truth.
+        """
+        if self._changes is None:
+            return {}
+        return {
             staged.key: dict(staged.change.after or {})
-            for staged in changes.staged_rows()
+            for staged in self._changes.staged_rows()
             if staged.is_new
         }
 
@@ -1075,7 +1068,6 @@ class TableEditorScreen(AppScreen):
         if not edit.ok:
             self.report_warning(edit.message or "the paste was not staged")
             return
-        self._sync_new_rows()
         self._render_rows()
         self._after_stage(True, edit.message or plan.summary())
 
@@ -1317,18 +1309,8 @@ class TableEditorScreen(AppScreen):
         table = self._table
         if table is None:
             return
-        key, _, row_index, _ = self._cursor()
-        changes = self._changes
         try:
-            sql = generate_for(
-                self.connection.provider().dialect,
-                table,
-                action,
-                key=key if action.needs_key else None,
-                values=self._row_values(row_index) if action.needs_values else None,
-                rows=self._all_row_values() if action.covers_table else (),
-                identity_insert=changes is not None and changes.requires_identity_insert(),
-            )
+            sql = self.generate_sql(action)
         except (ValueError, TypeError) as exc:
             self.report_error(f"cannot generate {action.value}: {exc}")
             return
@@ -1340,16 +1322,41 @@ class TableEditorScreen(AppScreen):
         self._show_sql_panel()
         self.status.show_message(f"generated {action.label} — nothing was executed")
 
+    def generate_sql(self, action: RowAction) -> str:
+        """The SQL for ``action`` over the rows as the grid currently shows them.
+
+        Values come from the staged overlay, not the fetched window: a generated
+        statement must describe the edits the user has staged, or the panel would show
+        SQL for values that Apply never uses.
+        """
+        table = self._table
+        if table is None:
+            raise ValueError("no table is loaded")
+        key, _, row_index, _ = self._cursor()
+        changes = self._changes
+        return generate_for(
+            self.connection.provider().dialect,
+            table,
+            action,
+            key=key if action.needs_key else None,
+            values=self._row_values(row_index) if action.needs_values else None,
+            rows=self._all_row_values() if action.covers_table else (),
+            identity_insert=changes is not None and changes.requires_identity_insert(),
+        )
+
     def _row_values(self, row_index: int) -> dict[str, object] | None:
         """The values shown for the grid row at ``row_index``, staged edits included."""
-        rows = self.query_one("#editor-grid", DataGrid).fetched_rows
-        if not 0 <= row_index < len(rows):
+        if not 0 <= row_index < self._row_count():
             return None
-        return dict(rows[row_index].values)
+        return self._display_values(row_index)
 
     def _all_row_values(self) -> list[dict[str, object]]:
-        """Every loaded row's values — the source for "insert script for all rows"."""
-        return [dict(row.values) for row in self.query_one("#editor-grid", DataGrid).fetched_rows]
+        """Every loaded row's values — the source for "insert script for all rows".
+
+        Staged edits are included, because the SQL panel must show the values the grid
+        shows: a script generated from the pre-edit rows would not match what Apply runs.
+        """
+        return [self._display_values(index) for index in range(self._row_count())]
 
     def _row_count(self) -> int:
         """How many rows the grid is showing (fetched plus staged new ones)."""
@@ -1422,7 +1429,6 @@ class TableEditorScreen(AppScreen):
                 return
             if generation != self.generation:
                 return
-            self._new_rows.clear()
             self._applied_keys = result.inserted_keys
             self._write_audit(counts, statements, "committed", result.duration_ms, None)
             self._after_apply(result.statement_count, result.duration_ms)

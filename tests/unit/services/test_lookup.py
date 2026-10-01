@@ -18,9 +18,13 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
+from sql_table_swiss_knife.providers.mssql import TSqlDialect
 from sql_table_swiss_knife.services import CatalogService, ConnectionService, LookupService
 from sql_table_swiss_knife.services.lookup import description_column, lookup_predicates
 from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+
+#: LIKE escaping is the dialect's job; these tests pin one dialect's syntax.
+DIALECT = TSqlDialect()
 
 COUNTRY = Table(
     schema="dbo",
@@ -159,7 +163,7 @@ def test_a_computed_column_is_not_offered_as_a_description() -> None:
 def test_searching_by_name_uses_a_like_over_the_description() -> None:
     description = description_column(COUNTRY, ("Code",))
 
-    predicates = lookup_predicates(COUNTRY, ["Code"], description, "ger")
+    predicates = lookup_predicates(COUNTRY, ["Code"], description, "ger", DIALECT)
 
     assert len(predicates) == 1
     assert predicates[0].column == "Name"
@@ -167,11 +171,11 @@ def test_searching_by_name_uses_a_like_over_the_description() -> None:
 
 
 def test_a_blank_search_asks_for_nothing_in_particular() -> None:
-    assert lookup_predicates(COUNTRY, ["Code"], None, "   ") == ()
+    assert lookup_predicates(COUNTRY, ["Code"], None, "   ", DIALECT) == ()
 
 
 def test_searching_a_numeric_reference_falls_back_to_equality() -> None:
-    predicates = lookup_predicates(NUMERIC_ONLY, ["MetricId"], None, "7")
+    predicates = lookup_predicates(NUMERIC_ONLY, ["MetricId"], None, "7", DIALECT)
 
     assert len(predicates) == 1
     assert predicates[0].operator.value == "="

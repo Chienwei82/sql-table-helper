@@ -10,11 +10,28 @@ from ..domain.rows import FilterOp, RowKey
 __all__ = [
     "ApplyOptions",
     "Condition",
+    "ErrorFacts",
     "SqlDialect",
     "SqlParam",
     "SqlScript",
     "SqlStatement",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorFacts:
+    """What a driver error message says about the failure, in DBMS-neutral terms.
+
+    Produced by :meth:`SqlDialect.inspect_error`, which is the only place that knows a
+    vendor's error wording. ``kind`` is a coarse class the UI can branch on, ``hint`` the
+    wording to show instead of raw vendor text, and ``constraint``/``column`` whatever the
+    message explicitly named.
+    """
+
+    kind: str = "error"
+    hint: str = ""
+    constraint: str | None = None
+    column: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +138,15 @@ class SqlDialect(Protocol):
 
     def placeholder(self, index: int) -> str: ...
 
+    def escape_like(self, text: str) -> str:
+        """Escape LIKE metacharacters in ``text`` so it matches literally.
+
+        The escaping syntax is dialect-specific (SQL Server uses brackets, others use a
+        backslash), so a service that builds a ``LIKE`` pattern must ask the dialect
+        rather than hard-code one dialect's rules.
+        """
+        raise NotImplementedError
+
     def literal(self, value: object) -> str:
         """Render a *value* as a self-contained literal — display/copy only (FR-5.2).
 
@@ -216,6 +242,14 @@ class SqlDialect(Protocol):
     def keyset_predicate_sql(self, key_columns: Sequence[str], placeholders: Sequence[str]) -> str:
         """A lexicographic ``>`` comparison over the key columns, for keyset paging."""
         ...
+
+    def inspect_error(self, message: str) -> ErrorFacts:
+        """Classify a driver error message into DBMS-neutral :class:`ErrorFacts`.
+
+        Which messages mean "duplicate key" is vendor wording, so it belongs here rather
+        than in a service that would otherwise have to hard-code one DBMS's English.
+        """
+        raise NotImplementedError
 
     def begin_transaction(self) -> str: ...
 

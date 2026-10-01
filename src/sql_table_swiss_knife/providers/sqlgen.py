@@ -75,6 +75,40 @@ def _condition(column: str, value: object, placeholder: str) -> Condition:
     return Condition(column=column, rendered=placeholder, is_null=value is None)
 
 
+def _bound_conditions(
+    dialect: SqlDialect,
+    conditions: Sequence[tuple[str, object]],
+    *,
+    first_index: int,
+) -> tuple[list[Condition], list[Condition], list[SqlParam]]:
+    """Split WHERE conditions into both renderings, plus the values to bind.
+
+    A NULL original value is compared with ``IS NULL``, which contains no placeholder —
+    so it must not contribute a bound parameter either. A driver rejects a parameter
+    count that does not match the statement's markers, and the optimistic-concurrency
+    guards hit this on every nullable column of a table without a rowversion, which is
+    the common case rather than an edge case.
+
+    Placeholder indices are allocated left-to-right over the conditions that actually
+    bind, so the numbering stays contiguous and matches ``SqlStatement.param_values``.
+    """
+    conditions_param: list[Condition] = []
+    conditions_literal: list[Condition] = []
+    params: list[SqlParam] = []
+    index = first_index
+    for name, value in conditions:
+        if value is None:
+            conditions_param.append(Condition(name, "", True))
+            conditions_literal.append(Condition(name, dialect.literal(value), True))
+            continue
+        placeholder = dialect.placeholder(index)
+        index += 1
+        params.append(SqlParam(placeholder, value, name))
+        conditions_param.append(Condition(name, placeholder, False))
+        conditions_literal.append(Condition(name, dialect.literal(value), False))
+    return conditions_param, conditions_literal, params
+
+
 def _key_conditions(table: Table, key: RowKey) -> list[tuple[str, object]]:
     conditions: list[tuple[str, object]] = []
     for name, value in key:
@@ -204,14 +238,10 @@ def build_update(
         conditions.append((rowversion.name, change.before[rowversion.name]))
     elif compare_original:
         conditions.extend(_compare_original_columns(table, change, changed))
-    conditions_param: list[Condition] = []
-    conditions_literal: list[Condition] = []
-    for offset, (name, value) in enumerate(conditions):
-        index = len(changed) + offset
-        placeholder = dialect.placeholder(index)
-        params.append(SqlParam(placeholder, value, name))
-        conditions_param.append(_condition(name, value, placeholder))
-        conditions_literal.append(Condition(name, dialect.literal(value), value is None))
+    conditions_param, conditions_literal, condition_params = _bound_conditions(
+        dialect, conditions, first_index=len(params)
+    )
+    params.extend(condition_params)
     sql_parametrized = dialect.update_sql(
         table.schema, table.name, assignments_param, conditions_param
     )
@@ -253,24 +283,16 @@ def build_delete(
         conditions.append((rowversion.name, change.before[rowversion.name]))
     elif compare_original:
         conditions.extend(_compare_original_columns(table, change, ()))
-    params = tuple(
-        SqlParam(dialect.placeholder(index), value, name)
-        for index, (name, value) in enumerate(conditions)
+    conditions_param, conditions_literal, params = _bound_conditions(
+        dialect, conditions, first_index=0
     )
-    conditions_param = [
-        _condition(name, value, param.name)
-        for (name, value), param in zip(conditions, params, strict=True)
-    ]
-    conditions_literal = [
-        Condition(name, dialect.literal(value), value is None) for name, value in conditions
-    ]
     sql_parametrized = dialect.delete_sql(table.schema, table.name, conditions_param)
     sql_literal = dialect.delete_sql(table.schema, table.name, conditions_literal)
     return SqlStatement(
         kind=ChangeKind.DELETE,
         table=str(table.ref),
         sql_parametrized=sql_parametrized,
-        params=params,
+        params=tuple(params),
         sql_literal=sql_literal,
         sql_script=sql_literal + ";",
         row_key=change.key,
@@ -486,7 +508,14 @@ def build_table_insert(
     names.sort(key=lambda name: table.column(name).ordinal)
     if not names:
         return ""
-    rendered = [[dialect.literal(row.get(name)) for name in names] for row in rows]
+    # A row with nothing writable in it would render as an all-NULL row, inserting junk
+    # instead of saying nothing, so it is dropped rather than emitted.
+    usable = [
+        row for row in rows if _writable_column_names(table, row, allow_identity=identity_insert)
+    ]
+    if not usable:
+        return ""
+    rendered = [[dialect.literal(row.get(name)) for name in names] for row in usable]
     return dialect.insert_rows_sql(table.schema, table.name, names, rendered)
 
 
@@ -540,11 +569,18 @@ def build_merge(
         table.column(name)
     if not rows:
         return ""
+    # All-or-nothing (AGENTS.md): a MERGE source row that lacks a key column would render
+    # as NULL, never match the ON clause, and fall through to NOT MATCHED — an INSERT of a
+    # NULL key. Refuse the batch instead of silently dropping or corrupting a row.
+    missing = [index for index, row in enumerate(rows) if any(name not in row for name in identity)]
+    if missing:
+        listed = ", ".join(str(index + 1) for index in missing[:5])
+        raise ValueError(
+            f"MERGE needs every key column ({', '.join(identity)}) on every row; "
+            f"row {listed} is missing one"
+        )
     names: list[str] = []
     for row in rows:
-        # Every MERGE row must carry every key column, or the join is not well-formed.
-        if any(name not in row for name in identity):
-            continue
         for name in _writable_column_names(table, row, allow_identity=identity_insert):
             if name not in names:
                 names.append(name)
@@ -554,7 +590,7 @@ def build_merge(
             names.insert(0, name)
     if not names:
         return ""
-    rendered = [[dialect.literal(row.get(name)) for name in names] for row in rows]
+    rendered = [[dialect.literal(row[name]) for name in names] for row in rows]
     return dialect.merge_sql(table.schema, table.name, identity, names, rendered)
 
 

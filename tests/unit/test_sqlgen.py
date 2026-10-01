@@ -1,5 +1,7 @@
 """Tests for sqlgen: INSERT/UPDATE/DELETE/SELECT builders and apply ordering."""
 
+from dataclasses import replace
+
 import pytest
 
 from sql_table_swiss_knife.domain import (
@@ -16,8 +18,10 @@ from sql_table_swiss_knife.providers import (
     ApplyOptions,
     build_delete,
     build_insert,
+    build_merge,
     build_select,
     build_statements,
+    build_table_insert,
     build_update,
     sort_for_apply,
 )
@@ -267,7 +271,66 @@ def test_a_null_original_value_is_compared_with_is_null(
     statement = build_update(dialect, region_table, change, compare_original=True)
     # WHERE [col] = NULL never matches, so the NULL guard must use IS NULL.
     assert "AND [ParentRegionId] IS NULL" in statement.sql_parametrized
-    assert statement.param_values == ("Bayern", 1, None)
+    # IS NULL binds nothing, so the NULL guard contributes no parameter either: a driver
+    # rejects a value count that does not match the statement's markers.
+    assert statement.param_values == ("Bayern", 1)
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ({"RegionId": 1, "Name": "Bavaria", "ParentRegionId": None}, {"Name": "Bayern"}),
+        ({"RegionId": 1, "Name": "Bavaria", "SortOrder": None}, {"Name": "Bayern"}),
+    ],
+)
+def test_bound_parameter_count_matches_the_placeholder_count(
+    dialect: TSqlDialect, region_table: Table, before: dict[str, object], after: dict[str, object]
+) -> None:
+    """A driver rejects a value count that does not match the statement's markers.
+
+    ``IS NULL`` renders no placeholder, so allocating a parameter for it produced
+    statements with more bound values than markers — the failure was invisible until
+    Apply reached a real driver, because the tests bind against a fake cursor.
+    """
+    update = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before=before,
+        after=after,
+    )
+    delete = replace(update, kind=ChangeKind.DELETE, after=None)
+    for statement in (
+        build_update(dialect, region_table, update, compare_original=True),
+        build_delete(dialect, region_table, delete, compare_original=True),
+    ):
+        markers = statement.sql_parametrized.count("@p")
+        assert len(statement.params) == markers
+        assert len(statement.param_values) == markers
+
+
+def test_placeholder_indices_stay_contiguous_across_a_null_guard(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    """Indices are allocated left-to-right over the conditions that actually bind.
+
+    The unchanged NULL column is a WHERE guard, so it renders no marker between two
+    conditions that do — the numbering must not skip an index just because it skipped a
+    value.
+    """
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TableRef(schema="dbo", name="Region"),
+        key=(("RegionId", 1),),
+        before={"RegionId": 1, "Name": "Bavaria", "ParentRegionId": None, "SortOrder": 3},
+        after={"Name": "Bayern"},
+    )
+    statement = build_update(dialect, region_table, change, compare_original=True)
+    assert statement.sql_parametrized == (
+        "UPDATE [dbo].[Region] SET [Name] = @p0 "
+        "WHERE [RegionId] = @p1 AND [ParentRegionId] IS NULL AND [SortOrder] = @p2"
+    )
+    assert statement.param_values == ("Bayern", 1, 3)
 
 
 def test_compare_original_adds_every_unchanged_column_to_the_where_clause(
@@ -410,3 +473,36 @@ def test_filters_and_the_keyset_cursor_share_placeholder_order(
     )
     assert select.sql.index("[Name] LIKE @p0") < select.sql.index("([Code]) > (@p1)")
     assert [param.name for param in select.params] == ["@p0", "@p1"]
+
+
+# -- generated batches (MERGE / multi-row INSERT) ---------------------------
+
+
+def test_merge_refuses_a_batch_where_a_row_is_missing_the_key(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    """All-or-nothing: a NULL-key source row never matches and would INSERT a NULL key.
+
+    The row used to be skipped when the column list was built but still rendered, so the
+    MERGE silently carried a NULL key into a NOT MATCHED INSERT.
+    """
+    with pytest.raises(ValueError, match="every key column"):
+        build_merge(dialect, country_table, [{"Code": "DE", "Name": "Germany"}, {"Name": "Rome"}])
+    assert "NULL" not in build_merge(dialect, country_table, [{"Code": "DE", "Name": "Germany"}])
+
+
+def test_table_insert_drops_rows_with_nothing_writable(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    """A row whose only column is server-managed becomes an all-NULL row otherwise.
+
+    The docstring promised the drop; the implementation emitted the row anyway.
+    """
+    # RegionId is an identity column, so {"RegionId": n} has nothing writable in it.
+    assert build_table_insert(dialect, region_table, [{"RegionId": 1}, {"RegionId": 2}]) == ""
+    sql = build_table_insert(
+        dialect, region_table, [{"RegionId": 1, "Name": "Bavaria"}, {"RegionId": 2}]
+    )
+    assert "(N'Bavaria')" in sql
+    assert sql.count("VALUES") == 1
+    assert "NULL" not in sql

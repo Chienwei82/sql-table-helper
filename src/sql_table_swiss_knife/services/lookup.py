@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from ..domain.catalog import Column, ForeignKey, Table
 from ..domain.rows import FilterOp, Row, RowFilter, RowKey
+from ..providers.dialect import SqlDialect
 from .catalog import CatalogService
 from .connection import ConnectionService
 from .data import DataService
@@ -84,7 +85,11 @@ def _normalized(name: str) -> str:
 
 
 def lookup_predicates(
-    table: Table, key_columns: Sequence[str], description: Column | None, term: str
+    table: Table,
+    key_columns: Sequence[str],
+    description: Column | None,
+    term: str,
+    dialect: SqlDialect,
 ) -> tuple[RowFilter, ...]:
     """Server-side search predicates for the picker's search box.
 
@@ -97,7 +102,7 @@ def lookup_predicates(
     term = term.strip()
     if not term:
         return ()
-    pattern = f"%{_escape_like(term)}%"
+    pattern = f"%{dialect.escape_like(term)}%"
     if description is not None and description.data_type.lower() in _TEXT_TYPES:
         return (RowFilter(column=description.name, operator=FilterOp.LIKE, value=pattern),)
     predicates = tuple(
@@ -177,13 +182,14 @@ class LookupService:
         then fetches one server-side-filtered page. A reference without a usable key still
         works: the first column is used as the display key.
         """
+        dialect = self._connection.provider().dialect
         target = await self._catalog.get_table(fk.referenced_schema, fk.referenced_table)
         keys = list(fk.referenced_columns) or list(target.identity_columns)
         if not keys:
             keys = [target.columns[0].name] if target.columns else []
         description = description_column(target, keys)
         window = await self._data.fetch(
-            target, limit=limit, filters=lookup_predicates(target, keys, description, term)
+            target, limit=limit, filters=lookup_predicates(target, keys, description, term, dialect)
         )
         return LookupResult(
             choices=tuple(_to_choice(row, keys, description) for row in window.rows),
@@ -209,19 +215,3 @@ def _format(value: object) -> str:
     if isinstance(value, bytes | bytearray | memoryview):
         return "0x" + bytes(value)[:8].hex()
     return str(value)
-
-
-def _escape_like(text: str) -> str:
-    """Escape LIKE wildcards so a typed ``%`` matches a literal percent sign.
-
-    SQL Server escapes a LIKE metacharacter with brackets, so ``%`` becomes ``[%]``.
-    Building the result in a single pass matters: escaping ``[`` first and ``]`` after
-    would re-escape the brackets this function just introduced.
-    """
-    escaped = []
-    for char in text:
-        if char in ("%", "_", "[", "]"):
-            escaped.append("[" + char + "]")
-        else:
-            escaped.append(char)
-    return "".join(escaped)

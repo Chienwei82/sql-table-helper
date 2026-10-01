@@ -13,6 +13,7 @@ from textual.widgets import Input, Static
 
 from sql_table_swiss_knife.domain import ChangeKind
 from sql_table_swiss_knife.domain.catalog import TableSummary
+from sql_table_swiss_knife.services.sqlpreview import RowAction
 from sql_table_swiss_knife.storage import ProfileStore
 from sql_table_swiss_knife.tui.screens import (
     CellEditorScreen,
@@ -352,3 +353,97 @@ async def test_a_concurrency_conflict_is_reported_and_the_work_is_kept(
         )
         assert screen.changes is not None
         assert screen.changes.is_empty is False  # still staged, so the user can retry
+
+
+async def test_a_filled_in_new_row_shows_its_value_not_null(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A staged INSERT's cells display what will be inserted.
+
+    The overlay published staged values for MODIFIED cells only, and looped over the
+    fetched rows only, so a new row the user had just typed into still read ``NULL``.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        await _open(app, pilot)
+        rows_before = _grid(app).row_count
+        await pilot.press("ctrl+n")
+        await _settle(pilot)
+        await pilot.press("right")  # Name
+        await pilot.press("enter")
+        await _settle(pilot)
+        editor = app.screen
+        assert isinstance(editor, CellEditorScreen)
+        editor.query_one("#cell-editor-input", Input).value = "Freedonia"
+        await _settle(pilot)
+        await pilot.press("enter")
+        await _settle(pilot)
+
+        assert "Freedonia" in _cell(app, rows_before, 1)
+
+
+async def test_generated_sql_reflects_a_staged_edit(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """The SQL panel must show the edited value, not the one that was fetched.
+
+    ``_row_values`` read the fetched rows directly, so generating an INSERT script for a
+    row with a staged edit produced SQL for the *pre-edit* values — breaking the promise
+    that the SQL you read is the SQL that runs.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        screen = await _open(app, pilot)
+        await _stage_name(app, pilot, "Xed")
+        await _settle(pilot)
+
+        sql = screen.generate_sql(RowAction.INSERT)
+        assert "Xed" in sql
+        assert "Switzerland" not in sql  # the pre-edit name
+
+
+async def test_a_script_for_all_rows_includes_staged_edits(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        screen = await _open(app, pilot)
+        await _stage_name(app, pilot, "Xed")
+        await _settle(pilot)
+
+        sql = screen.generate_sql(RowAction.INSERT_SCRIPT)
+        # Every loaded row is still in the script; only the staged row's name changed.
+        assert "N'Xed'" in sql
+        assert "N'Germany'" in sql  # an unstaged row is untouched
+        assert sql.count("N'Xed'") == 1
+
+
+async def test_a_refused_rebind_leaves_no_phantom_rows(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A refused rebind swaps in a fresh buffer, so no staged row can survive it.
+
+    The screen tracked new rows in a dict *alongside* the buffer; when rebind refused and
+    the buffer was replaced, the dict kept its keys and the grid showed rows that no longer
+    existed in the staging buffer.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        screen = await _open(app, pilot)
+        rows_before = _grid(app).row_count
+        await pilot.press("ctrl+n")
+        await _settle(pilot)
+        assert _grid(app).row_count == rows_before + 1
+
+        country = next(t for t in SAMPLE_TABLES if t.name == "Country")
+        other = next(t for t in SAMPLE_TABLES if t.ref != country.ref)
+        screen._apply_metadata(other, None)
+        await _settle(pilot)
+
+        assert screen._new_rows() == {}
+        assert screen.changes is not None
+        assert screen.changes.is_empty is True

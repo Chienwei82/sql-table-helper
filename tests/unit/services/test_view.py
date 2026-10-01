@@ -16,6 +16,7 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
+from sql_table_swiss_knife.providers.mssql import TSqlDialect
 from sql_table_swiss_knife.services.view import (
     FilterMode,
     GridView,
@@ -25,6 +26,9 @@ from sql_table_swiss_knife.services.view import (
     toggle_visible,
     visible_columns,
 )
+
+#: The filter text is escaped in the dialect's LIKE syntax, so these tests pin one.
+DIALECT = TSqlDialect()
 
 TABLE = Table(
     schema="dbo",
@@ -43,25 +47,25 @@ TABLE = Table(
 
 
 def test_contains_becomes_a_like_predicate() -> None:
-    predicates = filter_for((QuickFilter("Name", "er", FilterMode.CONTAINS),))
+    predicates = filter_for((QuickFilter("Name", "er", FilterMode.CONTAINS),), DIALECT)
 
     assert predicates == (RowFilter("Name", FilterOp.LIKE, "%er%"),)
 
 
 def test_equals_becomes_an_equality_predicate() -> None:
-    predicates = filter_for((QuickFilter("Name", "Germany", FilterMode.EQUALS),))
+    predicates = filter_for((QuickFilter("Name", "Germany", FilterMode.EQUALS),), DIALECT)
 
     assert predicates == (RowFilter("Name", FilterOp.EQ, "Germany"),)
 
 
 def test_a_blank_term_means_no_filter_at_all() -> None:
-    assert filter_for((QuickFilter("Name", "   "),)) == ()
+    assert filter_for((QuickFilter("Name", "   "),), DIALECT) == ()
     assert QuickFilter("Name", "").is_empty is True
     assert QuickFilter("Name", "x").is_empty is False
 
 
 def test_typed_wildcards_are_escaped_so_they_match_literally() -> None:
-    predicates = filter_for((QuickFilter("Name", "50%_off", FilterMode.CONTAINS),))
+    predicates = filter_for((QuickFilter("Name", "50%_off", FilterMode.CONTAINS),), DIALECT)
 
     # Only the metacharacters are escaped: % and _ become [%] and [_].
     assert predicates == (RowFilter("Name", FilterOp.LIKE, "%50[%][_]off%"),)
@@ -69,7 +73,7 @@ def test_typed_wildcards_are_escaped_so_they_match_literally() -> None:
 
 def test_several_filters_become_several_predicates() -> None:
     predicates = filter_for(
-        (QuickFilter("Name", "er"), QuickFilter("Code", "DE", FilterMode.EQUALS))
+        (QuickFilter("Name", "er"), QuickFilter("Code", "DE", FilterMode.EQUALS)), DIALECT
     )
 
     assert len(predicates) == 2
@@ -140,7 +144,7 @@ def test_a_default_view_shows_everything() -> None:
     assert view.columns(TABLE) == TABLE.columns
     assert view.is_filtered is False
     assert view.filter_label() == "no filter"
-    assert view.predicates() == ()
+    assert view.predicates(DIALECT) == ()
 
 
 def test_the_default_order_is_the_table_identity() -> None:

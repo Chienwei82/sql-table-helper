@@ -325,6 +325,16 @@ class DataGrid(DataTable[str]):
             return self._keys[row_index]
         return None
 
+    def row_values(self, row_index: int) -> dict[str, object]:
+        """The row's own values, staged or fetched — what the grid loaded it with.
+
+        This is the fetched half of what a row shows; a staged edit is layered on top by
+        the caller, because only the screen knows the change buffer.
+        """
+        if 0 <= row_index < len(self._rows):
+            return dict(self._rows[row_index].values)
+        return {}
+
     def column_at(self, column_index: int) -> Column | None:
         """Metadata of the column under ``column_index``, or ``None`` when out of range."""
         if not 0 <= column_index < len(self._columns):

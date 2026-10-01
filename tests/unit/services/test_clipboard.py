@@ -427,12 +427,70 @@ def test_a_fill_converts_values_against_their_column_type() -> None:
 # -- planning: rows --------------------------------------------------------
 
 
+def test_a_positional_row_paste_writes_the_key_so_a_match_updates() -> None:
+    """Without a header the key is positional, and it must still reach the UPDATE.
+
+    The key column used to be filtered out of positional row pastes as if it were the
+    SQL Server IDENTITY property. It is not: `identity_columns` is row identity (the PK,
+    else a single-column UNIQUE). Dropping it meant a pasted key matched nothing, so
+    pasting existing rows silently staged duplicate INSERTs instead of UPDATEs.
+    """
+    grid = target(anchor_column=0)
+    plan = plan_paste(grid, parse_block("DE\tGermany"), mode=PasteMode.ROWS)
+    assert plan.rows[0].outcome is RowOutcome.UPDATE
+    assert plan.rows[0].target_row == 0
+    assert plan.rows[0].key == (("Code", "DE"),)
+    assert [cell.column for cell in plan.rows[0].values] == ["Code", "Name"]
+    assert not plan.inserts
+
+
+def test_a_positional_row_paste_with_an_unknown_key_inserts() -> None:
+    """Carrying the key is what distinguishes an INSERT from an UPDATE (FR-4.6)."""
+    grid = target(anchor_column=0)
+    plan = plan_paste(grid, parse_block("IT\tItaly"), mode=PasteMode.ROWS)
+    assert plan.rows[0].outcome is RowOutcome.INSERT
+    assert plan.rows[0].target_row is None
+    assert [cell.column for cell in plan.rows[0].values] == ["Code", "Name"]
+
+
+def test_a_positional_row_paste_still_never_writes_a_server_managed_column() -> None:
+    """S-3 is about IDENTITY/computed/rowversion, which stay unwritable positionally."""
+    grid = target(anchor_column=0)
+    plan = plan_paste(grid, parse_block("DE\tGermany\tX\t0x01"), mode=PasteMode.ROWS)
+    written = {cell.column for cell in plan.rows[0].values}
+    assert "NameUpper" not in written
+    assert "RowVer" not in written
+
+
 def test_rows_without_a_key_column_are_all_inserts() -> None:
-    grid = target()
-    plan = plan_paste(grid, parse_block("Germany\t83\tX\nFrance\t67\tY"))
+    """A table with no row identity cannot match anything, so every row is INSERTed."""
+    keyless = Table(
+        schema="dbo",
+        name="Lookup",
+        kind=TableKind.BASE_TABLE,
+        columns=(Column("Label", 1, "nvarchar", 50, None, None, False, None, False),),
+        primary_key=None,
+    )
+    grid = target(table=keyless, columns=keyless.columns, rows=())
+    plan = plan_paste(grid, parse_block("a\nb"), mode=PasteMode.ROWS)
     assert len(plan.inserts) == 2
     assert not plan.updates
     assert any("INSERTed" in note for note in plan.notes)
+
+
+def test_a_json_array_of_scalars_parses_as_one_cell_per_row() -> None:
+    """Iterating a scalar element directly raised TypeError, which is not actionable."""
+    block = parse_block("[1, 2, 3]")
+    assert block.rows == (("1",), ("2",), ("3",))
+
+
+def test_a_ragged_json_array_is_padded_to_a_rectangular_block() -> None:
+    assert parse_block('[["a", "b"], ["c"]]').rows == (("a", "b"), ("c", ""))
+
+
+def test_malformed_json_raises_a_clipboard_error() -> None:
+    with pytest.raises(ClipboardParseError):
+        parse_block("[1, 2,")
 
 
 def test_a_row_carrying_the_key_updates_the_matching_row() -> None:
@@ -471,14 +529,6 @@ def test_a_header_naming_a_server_managed_column_does_not_write_it() -> None:
     plan = plan_paste(grid, parse_block("Name\tRowVer\nGermany\t0x0102", known_columns=NAMES))
     assert [cell.column for cell in plan.rows[0].values] == ["Name"]
     assert any("server-managed" in note for note in plan.notes)
-
-
-def test_a_positional_row_insert_never_writes_the_key_implicitly() -> None:
-    """Without a header the PK column is positional — but still never written (S-3)."""
-    grid = target(anchor_column=0)
-    plan = plan_paste(grid, parse_block("DE\tGermany"), mode=PasteMode.ROWS)
-    assert plan.rows[0].outcome is RowOutcome.INSERT
-    assert [cell.column for cell in plan.rows[0].values] == ["Name"]
 
 
 def test_untouched_columns_are_reported() -> None:
