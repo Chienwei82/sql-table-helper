@@ -72,6 +72,10 @@ class Column:
     is_foreign_key: bool = False
     #: For computed columns: whether the value is physically stored (``PERSISTED``).
     computed_persisted: bool | None = None
+    #: ``sys.columns.generated_always_type``: 0 = user-maintained, 1 = period start of a
+    #: temporal table, 2 = period end. These columns are maintained by the engine and the
+    #: server rejects any attempt to write them.
+    generated_always_type: int = 0
 
     def __post_init__(self) -> None:
         validate_identifier(self.name, kind="column name")
@@ -89,7 +93,13 @@ class Column:
     @property
     def is_server_managed(self) -> bool:
         """True when the value is maintained by the server (never user-editable)."""
-        return self.is_identity or self.is_computed or self.is_rowversion
+        return (
+            self.is_identity
+            or self.is_computed
+            or self.is_rowversion
+            # Temporal period columns: GENERATED ALWAYS, so the server owns them.
+            or self.generated_always_type != 0
+        )
 
 
 @dataclass(frozen=True, slots=True)

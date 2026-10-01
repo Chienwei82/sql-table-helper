@@ -6,6 +6,8 @@ row mapping, listing and the ``inspect`` CLI render — without a server, by stu
 """
 
 import sys
+from datetime import date, datetime
+from datetime import time as dt_time
 from typing import Any
 
 import pytest
@@ -24,7 +26,12 @@ from sql_table_swiss_knife.domain import (
     TableRef,
 )
 from sql_table_swiss_knife.providers import ApplyOptions, get_provider
-from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+from sql_table_swiss_knife.providers.errors import ConnectError
+from sql_table_swiss_knife.providers.mssql.dialect import TSqlDialect
+from sql_table_swiss_knife.providers.mssql.errors import map_pyodbc_error
+from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider, bindable, to_positional
+
+from .test_mssql_connection import _RealShapePyodbcError
 
 # -- fake driver --------------------------------------------------------------
 
@@ -264,10 +271,12 @@ class FakePyodbc:
 
     def __init__(self) -> None:
         self.connections: list[FakeRawConnection] = []
+        self.kwargs: list[dict[str, Any]] = []
 
     def connect(self, connection_string: str, **kwargs: Any) -> FakeRawConnection:
         connection = FakeRawConnection(connection_string)
         self.connections.append(connection)
+        self.kwargs.append(kwargs)
         return connection
 
     def Cursor(self) -> FakeCursor:
@@ -309,6 +318,24 @@ async def test_connect_uses_the_built_connection_string(
     assert conn.closed is False
     assert "PWD=pw" in fake_pyodbc.connections[0].connection_string
     assert "TrustServerCertificate=yes" in fake_pyodbc.connections[0].connection_string
+
+
+async def test_connect_enables_autocommit(
+    monkeypatch: pytest.MonkeyPatch, profile: ConnectionProfile
+) -> None:
+    """ODBC defaults autocommit to off, which leaves @@TRANCOUNT at 1 from the start.
+
+    Verified against a real server: without this, reads hold open locks and a failed Apply
+    leaks its transaction instead of unwinding, so the next statement sees stale locks.
+    """
+    module = FakePyodbc()
+    monkeypatch.setattr(
+        "sql_table_swiss_knife.providers.mssql.provider.import_pyodbc", lambda: module
+    )
+
+    await MssqlProvider().connect(profile, "pw")
+
+    assert module.kwargs[0].get("autocommit") is True
 
 
 async def test_connect_closes_runner_on_failure(
@@ -497,7 +524,8 @@ async def test_execute_changes_runs_in_one_transaction_and_commits(
     assert result.statement_count == 1
     statements = fake_pyodbc.connections[0].statements()[before:]
     assert statements[0] == "BEGIN TRANSACTION"
-    assert statements[1].startswith("UPDATE [dbo].[Region] SET [Name] = @p0")
+    # Markers are positional: the dialect's @pN names are for the preview legend only.
+    assert statements[1].startswith("UPDATE [dbo].[Region] SET [Name] = ?")
     assert statements[-1] == "COMMIT TRANSACTION"
     assert "ROLLBACK TRANSACTION" not in statements
 
@@ -650,3 +678,99 @@ async def test_execute_changes_does_not_emit_identity_insert_on_a_natural_key_ta
     assert not any("IDENTITY_INSERT" in sql for sql in emitted), emitted
     assert emitted[0] == "BEGIN TRANSACTION"
     assert emitted[-1] == "COMMIT TRANSACTION"
+
+
+class TestToPositional:
+    """The dialect names placeholders ``@pN``; the driver only understands ``?``.
+
+    Sending the named form straight to the driver left the statement with no markers, so
+    every filtered read and every write failed with "The SQL contains 0 parameter markers,
+    but N parameters were supplied".
+    """
+
+    def test_named_placeholders_become_positional_markers(self) -> None:
+        sql = "UPDATE [dbo].[T] SET [Name] = @p0 WHERE [Code] = @p1 AND [RowVer] = @p2"
+        assert to_positional(sql) == (
+            "UPDATE [dbo].[T] SET [Name] = ? WHERE [Code] = ? AND [RowVer] = ?"
+        )
+
+    def test_marker_count_matches_the_bound_values(self) -> None:
+        sql = "INSERT INTO [dbo].[T] ([a],[b],[c]) VALUES (@p0, @p1, @p2)"
+        assert to_positional(sql).count("?") == 3
+
+    def test_order_is_preserved_so_values_stay_aligned(self) -> None:
+        sql = "SELECT * FROM t WHERE a = @p0 OR b = @p1 OR c = @p2"
+        assert to_positional(sql) == "SELECT * FROM t WHERE a = ? OR b = ? OR c = ?"
+
+    def test_multi_digit_indices_are_replaced_whole(self) -> None:
+        sql = "SELECT * FROM t WHERE a = @p1 AND b = @p10 AND c = @p2"
+        assert to_positional(sql) == "SELECT * FROM t WHERE a = ? AND b = ? AND c = ?"
+
+    def test_statement_without_placeholders_is_unchanged(self) -> None:
+        assert to_positional("SELECT 1") == "SELECT 1"
+
+
+class TestBindable:
+    """pyodbc sends ``time`` with a scale of 0, silently dropping the microseconds.
+
+    ``13:45:56.123456`` was stored in a ``time(7)`` column as ``13:45:56``. Sending the
+    same value as text preserves all the fractional digits the column can hold.
+    """
+
+    def test_time_with_microseconds_is_sent_as_text(self) -> None:
+        value = dt_time(13, 45, 56, 123456)
+        assert bindable(value) == "13:45:56.123456"
+
+    def test_time_without_microseconds_is_left_as_a_time(self) -> None:
+        value = dt_time(13, 45, 56)
+        assert bindable(value) is value
+
+    def test_other_types_pass_through_untouched(self) -> None:
+        for value in (1, "text", None, date(2024, 2, 29), datetime(2024, 2, 29, 1, 2, 3)):
+            assert bindable(value) is value
+
+
+class TestTlsErrorMapping:
+    """A TLS failure arrives as 08001, the same state as an unreachable host."""
+
+    def test_certificate_failure_mentions_tls_not_the_firewall(self) -> None:
+        message = (
+            "[08001] [Microsoft][ODBC Driver 18 for SQL Server]SSL Provider: "
+            "[error:0A000086:SSL routines::certificate verify failed:self-signed certificate] "
+            "(-1) (SQLDriverConnect)"
+        )
+        mapped = map_pyodbc_error(_RealShapePyodbcError("08001", message))
+        assert isinstance(mapped, ConnectError)
+        assert "TLS" in str(mapped)
+        assert "certificate" in str(mapped).lower()
+
+    def test_a_genuinely_unreachable_host_keeps_the_reachability_wording(self) -> None:
+        mapped = map_pyodbc_error(
+            _RealShapePyodbcError("08001", "TCP Provider: No connection could be made")
+        )
+        assert isinstance(mapped, ConnectError)
+        assert "cannot reach" in str(mapped)
+
+    def test_a_timeout_is_still_reported_as_a_timeout(self) -> None:
+        mapped = map_pyodbc_error(_RealShapePyodbcError("HYT00", "Timeout expired"))
+        assert "timed out" in str(mapped)
+
+
+class TestQuotedObjectTarget:
+    """``OBJECT_ID`` parses brackets, so a name with ``]`` must be escaped for it.
+
+    ``f"[{schema}].[{name}]"`` produced ``[Lookups].[Weird ]Name]``, which resolves to no
+    object: the table exists but every metadata read claimed it did not.
+    """
+
+    def test_closing_bracket_in_a_name_is_doubled(self) -> None:
+        dialect = TSqlDialect()
+        assert dialect.quote_qualified("Lookups", "Weird ]Name") == "[Lookups].[Weird ]]Name]"
+
+    def test_plain_names_are_unchanged(self) -> None:
+        dialect = TSqlDialect()
+        assert dialect.quote_qualified("dbo", "Region") == "[dbo].[Region]"
+
+    def test_accented_names_are_preserved(self) -> None:
+        dialect = TSqlDialect()
+        assert dialect.quote_qualified("catálogos", "Moneda") == "[catálogos].[Moneda]"
