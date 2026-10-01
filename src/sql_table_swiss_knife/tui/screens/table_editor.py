@@ -1,13 +1,10 @@
-import asyncio
-from collections.abc import Mapping, Sequence
-from pathlib import Path
+from collections.abc import Collection, Mapping
 from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.coordinate import Coordinate
-from textual.events import Paste
 from textual.widgets import DataTable, Static
 
 from ...domain.catalog import Column, Table, TableSummary
@@ -15,16 +12,6 @@ from ...domain.changes import ChangeKind
 from ...domain.rows import Row, RowKey
 from ...services.cellview import cell_view
 from ...services.changes import ApplyError, CellStatus, ChangeService
-from ...services.clipboard import (
-    ClipboardBlock,
-    ClipboardOptions,
-    ClipboardParseError,
-    PastePlan,
-    PasteTarget,
-    encode_block,
-    parse_block,
-    plan_paste,
-)
 from ...services.connection import is_connection_lost
 from ...services.data import DataService, RowWindow, status_text
 from ...services.inspector import InspectorService, Severity, Warning, fks_for, read_only_reason
@@ -37,7 +24,6 @@ from ...services.sqlpreview import (
     generate_for,
     next_mode,
 )
-from ...services.transfer import TransferError, export_rows, read_block, suffix_format, write_text
 from ...services.validation import ParsedValue
 from ...services.view import GridView, QuickFilter
 from ...storage import AuditEntry, AuditLogError
@@ -49,11 +35,10 @@ from .cell_editor import CellEditorScreen
 from .cell_view import CellViewScreen
 from .column_picker import ColumnPickerScreen
 from .confirm import ConfirmScreen
+from .editor_clipboard import ClipboardMixin
 from .lookup_picker import LookupPickerScreen
-from .paste_preview import PastePreviewScreen
 from .quick_filter import QuickFilterScreen
 from .sql_action import SqlActionScreen
-from .transfer_path import PathPromptScreen
 
 __all__ = ["TableEditorScreen"]
 
@@ -68,8 +53,14 @@ _STATUS_CLASS: dict[CellStatus, str] = {
 }
 
 
-class TableEditorScreen(AppScreen):
-    """Split view over one table or view: rows on the left, schema on the right."""
+class TableEditorScreen(ClipboardMixin, AppScreen):
+    """Split view over one table or view: rows on the left, schema on the right.
+
+    The screen composes its concerns as mixins rather than accumulating them here:
+    :class:`~.editor_clipboard.ClipboardMixin` owns copy/paste/import/export. ``BINDINGS``
+    must stay on this class — Textual collects bindings only from the concrete screen, so
+    a binding declared on a mixin never fires.
+    """
 
     CSS = """
     #editor-body {
@@ -334,16 +325,26 @@ class TableEditorScreen(AppScreen):
             return []
         return [row_key_for(self._table, row.values) for row in self._window.rows]
 
-    def _refresh_overlay(self) -> None:
-        """Redraw the staged values and states over the fetched rows (FR-3.7)."""
+    def _refresh_overlay(self, rows: Collection[int] | None = None) -> None:
+        """Redraw the staged values and states over the fetched rows (FR-3.7).
+
+        ``rows`` limits the repaint to the row a stage just changed. Only staged rows can
+        differ from what was fetched, so a keystroke costs O(columns) instead of walking
+        every cell of the window; ``None`` repaints everything, which is what a reload or
+        a column change needs.
+        """
         grid = self.query_one("#editor-grid", DataGrid)
         changes = self._changes
         if changes is None:
             return
+        indexes = range(grid.row_count) if rows is None else rows
         statuses: dict[tuple[RowKey | None, str], str] = {}
         values: dict[tuple[RowKey | None, str], object] = {}
-        for row_index in range(grid.row_count):
+        for row_index in indexes:
+            if not 0 <= row_index < grid.row_count:
+                continue
             key = grid.key_at(row_index)
+            row_values = grid.row_values(row_index)
             for column in grid.visible_columns:
                 status = (
                     changes.status_for(key, column.name)
@@ -355,10 +356,10 @@ class TableEditorScreen(AppScreen):
                 # overlay must publish them; only MODIFIED was published, which left a
                 # filled-in new row showing NULL.
                 if status in (CellStatus.MODIFIED, CellStatus.NEW) and key is not None:
-                    values[(key, column.name)] = changes.display_values(
-                        key, grid.row_values(row_index)
-                    ).get(column.name)
-        grid.apply_overlay(statuses, values)
+                    values[(key, column.name)] = changes.display_values(key, row_values).get(
+                        column.name
+                    )
+        grid.apply_overlay(statuses, values, rows=indexes)
 
     def _show_warning_summary(self, warnings: tuple[Warning, ...]) -> None:
         """Show the one-line severity roll-up above the grid, when there is anything to say.
@@ -598,7 +599,11 @@ class TableEditorScreen(AppScreen):
             edit = self._changes.fill_new_row(key, column.name, parsed.value)
         else:
             edit = self._changes.edit_cell(key, column.name, _render(parsed.value), original)
-        self._after_stage(edit.ok, f"{column.name} staged" if edit.ok else edit.message)
+        self._after_stage(
+            edit.ok,
+            f"{column.name} staged" if edit.ok else edit.message,
+            rows=[row_index],
+        )
 
     def _on_lookup_chosen(
         self,
@@ -616,7 +621,7 @@ class TableEditorScreen(AppScreen):
             edit = self._changes.fill_new_row(key, column.name, value)
         else:
             edit = self._changes.stage_value(key, column.name, value, original)
-        self._after_stage(edit.ok, f"{column.name} = {value!r}")
+        self._after_stage(edit.ok, f"{column.name} = {value!r}", rows=[row_index])
 
     def action_insert_row(self) -> None:
         """Stage a brand new row at the end of the grid (``ctrl+n``)."""
@@ -745,13 +750,18 @@ class TableEditorScreen(AppScreen):
             if staged.is_new
         }
 
-    def _after_stage(self, ok: bool, message: str) -> None:
-        """Redraw the overlay and the pending strip after any staging change."""
+    def _after_stage(self, ok: bool, message: str, rows: Collection[int] | None = None) -> None:
+        """Redraw the overlay and the pending strip after any staging change.
+
+        ``rows`` names the rows that changed, so the overlay repaints just those; ``None``
+        repaints the whole window, which undo/redo and discard need because they can move
+        several rows at once.
+        """
         # A generated statement is a snapshot of one row at one moment; once the staging
         # area moves, keeping it on screen would be showing SQL for a state that no longer
         # exists, so the panel falls back to the change list.
         self._sql_generated = None
-        self._refresh_overlay()
+        self._refresh_overlay(rows)
         self._refresh_pending()
         self.refresh_sql_panel()
         self.refresh_hints()
@@ -811,343 +821,6 @@ class TableEditorScreen(AppScreen):
             return
         self._view = self._view.with_sort(column.name)
         self.load_metadata()
-
-    # -- clipboard (FR-4) ---------------------------------------------------
-
-    @property
-    def clipboard_options(self) -> ClipboardOptions:
-        """The user's copy/paste settings, read fresh (they can change mid-session)."""
-        return ClipboardOptions.from_settings(owning_app(self).settings)
-
-    def _paste_target(self) -> PasteTarget | None:
-        """The grid as the clipboard service sees it: values, keys and the anchor cell."""
-        table = self._table
-        if table is None:
-            return None
-        grid = self.query_one("#editor-grid", DataGrid)
-        count = len(grid.fetched_rows)
-        return PasteTarget(
-            table=table,
-            columns=grid.visible_columns,
-            rows=tuple(self._display_values(index) for index in range(count)),
-            keys=tuple(grid.key_at(index) for index in range(count)),
-            anchor_row=grid.cursor_row,
-            anchor_column=grid.cursor_column,
-            selection=self.selection(),
-        )
-
-    def selection(self) -> tuple[int, int, int, int] | None:
-        """The selected rectangle as ``(top, left, bottom, right)``, or ``None``.
-
-        The anchor is set by the first ``shift+arrow``; the live end is the grid cursor, so
-        the selection follows the cursor the way every text widget's does.
-        """
-        anchor = self._selection_anchor
-        if anchor is None:
-            return None
-        grid = self.query_one("#editor-grid", DataGrid)
-        end = Coordinate(grid.cursor_row, grid.cursor_column)
-        top, bottom = sorted((anchor.row, end.row))
-        left, right = sorted((anchor.column, end.column))
-        return (top, left, bottom, right)
-
-    def action_select(self, row_delta: int = 0, column_delta: int = 0) -> None:
-        """Extend the selection with ``shift+arrow`` (FR-4.1: copy a range)."""
-        grid = self.query_one("#editor-grid", DataGrid)
-        if self._selection_anchor is None:
-            self._selection_anchor = Coordinate(grid.cursor_row, grid.cursor_column)
-        grid.cursor_coordinate = Coordinate(
-            max(0, grid.cursor_row + row_delta), max(0, grid.cursor_column + column_delta)
-        )
-
-    def action_select_up(self) -> None:
-        self.action_select(row_delta=-1)
-
-    def action_select_down(self) -> None:
-        self.action_select(row_delta=1)
-
-    def action_select_left(self) -> None:
-        self.action_select(column_delta=-1)
-
-    def action_select_right(self) -> None:
-        self.action_select(column_delta=1)
-
-    def action_clear_selection(self) -> None:
-        """Drop the selection (``ctrl+escape``)."""
-        self._selection_anchor = None
-        self.refresh_hints()
-
-    # -- copy ----------------------------------------------------------------
-
-    def action_copy_data(self) -> None:
-        """Copy the cell / row / column / selection as the current format (``ctrl+c``).
-
-        Deliberately a different key from ``y`` (copy SQL): "copy this row" and "copy the
-        INSERT for this row" are different requests, and a user who reaches for one must
-        never get the other.
-        """
-        table = self._table
-        if table is None:
-            return
-        columns, rows = self._copy_block()
-        if not rows:
-            self.status.show_message("nothing to copy — no rows are loaded", level="warning")
-            return
-        text = encode_block(
-            [column.name for column in columns],
-            rows,
-            fmt=self._copy_format,
-            options=self.clipboard_options,
-        )
-        outcome = owning_app(self).clipboard_service.copy(text)
-        scope = self._selection_label()
-        if outcome.ok:
-            self.status.show_message(
-                f"copied {scope} as {self._copy_format} ({len(text)} chars) — {outcome.describe()}"
-            )
-        else:
-            self.report_warning(outcome.detail or "the clipboard could not be written")
-
-    def _selection_label(self) -> str:
-        """What the copy action will take, named the way the user thinks about it."""
-        if self._copy_scope == "selection":
-            rectangle = self.selection()
-            return "the selection" if rectangle else "the focused cell (no selection)"
-        if self._copy_scope == "row":
-            return "the focused row"
-        if self._copy_scope == "column":
-            return "the focused column"
-        return "the focused cell"
-
-    def _copy_block(self) -> tuple[tuple[Column, ...], tuple[tuple[object, ...], ...]]:
-        """The cell/row/column/selection rectangle the copy action should encode (FR-4.1)."""
-        grid = self.query_one("#editor-grid", DataGrid)
-        visible = grid.visible_columns
-        if not visible or not grid.fetched_rows:
-            return (), ()
-        row_index, column_index = grid.cursor_row, grid.cursor_column
-        scope = self._copy_scope
-        indices: Sequence[int]
-        columns: tuple[Column, ...]
-        rectangle = self.selection()
-        if scope == "selection" and rectangle is not None:
-            top, left, bottom, right = rectangle
-            columns = visible[left : right + 1]
-            indices = range(top, min(bottom, len(grid.fetched_rows) - 1) + 1)
-        elif scope == "row":
-            columns, indices = visible, [row_index]
-        elif scope == "column":
-            columns, indices = (visible[column_index],), range(len(grid.fetched_rows))
-        else:
-            columns, indices = (visible[column_index],), [row_index]
-        rows = tuple(
-            tuple(self._display_values(index).get(column.name) for column in columns)
-            for index in indices
-        )
-        return columns, rows
-
-    def action_copy_scope(self) -> None:
-        """Cycle what the copy takes: cell → row → column → selection (``b``)."""
-        scopes = ("cell", "row", "column", "selection")
-        position = scopes.index(self._copy_scope) if self._copy_scope in scopes else 0
-        self._copy_scope = scopes[(position + 1) % len(scopes)]
-        self.refresh_hints()
-        self.status.show_message(f"ctrl+c copies {self._selection_label()}")
-
-    def action_copy_format(self) -> None:
-        """Cycle the copy format TSV → CSV → JSON (``p``, FR-4.2) and remember it."""
-        self._copy_format = self.clipboard_options.next_copy_format(self._copy_format)
-        owning_app(self).persist_settings(copy_format=self._copy_format)
-        self.refresh_hints()
-        self.status.show_message(f"copy format: {self._copy_format.upper()}")
-
-    # -- paste ---------------------------------------------------------------
-
-    def on_paste(self, event: Paste) -> None:
-        """Terminal bracketed paste (FR-4.7) — the primary paste path.
-
-        Textual delivers the whole payload as one event, which is what makes a multi-line
-        Excel block arrive intact instead of as a stream of keystrokes.
-        """
-        event.stop()
-        self.handle_paste_text(event.text)
-
-    def action_paste(self) -> None:
-        """``ctrl+v`` without bracketed paste: read the system clipboard instead.
-
-        Reading a clipboard is opt-in (``clipboard_read_fallback``); when it is off, say so
-        rather than appearing to paste nothing.
-        """
-        clipboard = owning_app(self).clipboard_service
-        if not clipboard.read_fallback:
-            self.report_warning(
-                "this terminal did not send a bracketed paste; enable "
-                "clipboard_read_fallback in settings.toml to paste with ctrl+v"
-            )
-            return
-        text = clipboard.read()
-        if text is None:
-            self.report_warning("the system clipboard could not be read")
-            return
-        self.handle_paste_text(text)
-
-    def handle_paste_text(self, text: str) -> None:
-        """Parse, plan and preview a paste payload — nothing is staged yet (FR-4.6)."""
-        target = self._paste_target()
-        table = self._table
-        if target is None or table is None:
-            self.status.show_message("no table is open — nothing to paste into")
-            return
-        options = self.clipboard_options
-        if not self._require_writable():
-            return
-        names = [column.name for column in table.columns]
-        try:
-            block = parse_block(text, known_columns=names)
-        except ClipboardParseError as exc:
-            self.report_error(str(exc))
-            return
-        if block.is_empty:
-            self.status.show_message("nothing to paste — the clipboard text is empty")
-            return
-        if block.ragged:
-            self.status.show_message(
-                f"the block is ragged (rows of different widths, {block.column_count} "
-                "columns wide) — missing cells are treated as empty",
-            )
-        self._plan_in_background(target, block, options)
-
-    def _plan_in_background(
-        self, target: PasteTarget, block: ClipboardBlock, options: ClipboardOptions
-    ) -> None:
-        """Plan off the event loop so a huge paste cannot freeze the UI (NFR-2).
-
-        Parsing and converting a 5000-row block with per-cell validation is real work; it
-        runs in a worker thread while the status line shows progress, and the result comes
-        back through the event loop to be previewed.
-        """
-        self.status.show_busy("planning the paste…")
-
-        async def work() -> None:
-            # The worker resumes on the event loop after the thread finishes, so the
-            # review dialog is pushed from the UI thread without ``call_from_thread``.
-            plan = await asyncio.to_thread(plan_paste, target, block, options=options)
-            self._review_paste(plan)
-
-        self.run_worker(work(), name="paste-plan", group="paste")
-
-    def _review_paste(self, plan: PastePlan) -> None:
-        """Show the Paste Preview dialog for a planned paste (FR-4.6).
-
-        A plan that converts nothing is never previewed: either a cell failed (and the user
-        needs the *list*, not a dialog to confirm) or the whole block was refused up front
-        (empty, over ``paste_max_rows``, nothing to map). Both are reported as one message.
-        """
-        if plan.rows and plan.errors:
-            self.report_error(
-                f"paste refused: {len(plan.errors)} cell(s) do not convert "
-                f"(first: {plan.errors[0]})"
-            )
-            return
-        if not plan.rows:
-            self.report_warning(f"paste refused: {'; '.join(plan.notes) or 'nothing to paste'}")
-            return
-        self.push(
-            PastePreviewScreen(plan, title=f"Paste into {self._table.ref if self._table else ''}"),
-            lambda confirmed: self._on_paste_confirmed(confirmed, plan),
-        )
-
-    def _on_paste_confirmed(self, confirmed: bool | None, plan: PastePlan) -> None:
-        """Stage a confirmed plan — through the staging area, never the database (S-1)."""
-        changes = self._changes
-        if not confirmed or changes is None:
-            return
-        grid = self.query_one("#editor-grid", DataGrid)
-        originals = tuple(self._original_values(index) for index in range(len(grid.fetched_rows)))
-        edit = changes.stage_paste(plan, originals)
-        if not edit.ok:
-            self.report_warning(edit.message or "the paste was not staged")
-            return
-        self._render_rows()
-        self._after_stage(True, edit.message or plan.summary())
-
-    # -- import / export (file transfer, same pipeline) ----------------------
-
-    def action_import_file(self) -> None:
-        """Import a CSV/JSON file through the same preview a clipboard paste gets (``i``)."""
-        if self._table is None or not self._require_writable():
-            return
-        self.push(
-            PathPromptScreen(
-                f"Import into {self._table.ref}",
-                hint=(
-                    "the file is parsed exactly like a pasted block: header names map by "
-                    "name, everything else positionally. Nothing is written until you "
-                    "confirm the preview and apply."
-                ),
-                must_exist=True,
-            ),
-            self._on_import_path,
-        )
-
-    def _on_import_path(self, path: Path | None) -> None:
-        """Read the file and hand it to the same planning path as a paste."""
-        target = self._paste_target()
-        if path is None or target is None:
-            return
-        names = [column.name for column in target.table.columns]
-        try:
-            block = read_block(path, known_columns=names)
-        except TransferError as exc:
-            self.report_error(str(exc))
-            return
-        self.status.show_message(f"read {path.name}: {block.row_count} row(s)")
-        self._plan_in_background(target, block, self.clipboard_options)
-
-    def action_export_file(self) -> None:
-        """Export the rows on screen (staged edits included) to a CSV/JSON file (``o``)."""
-        table = self._table
-        if table is None:
-            return
-        grid = self.query_one("#editor-grid", DataGrid)
-        columns = grid.visible_columns
-        if not grid.fetched_rows:
-            self.status.show_message("nothing to export — no rows are loaded", level="warning")
-            return
-        default = Path.cwd() / f"{table.name}.csv"
-        self.push(
-            PathPromptScreen(
-                f"Export {table.ref} as CSV",
-                hint=(
-                    "the file holds the rows as shown, staged edits included; the .csv or "
-                    ".json suffix picks the format."
-                ),
-                initial=str(default),
-            ),
-            self._on_export_path,
-        )
-        self._export_columns = columns
-
-    def _on_export_path(self, path: Path | None) -> None:
-        """Write the export; a write error is reported rather than swallowed."""
-        columns = self._export_columns
-        if path is None or not columns:
-            return
-        grid = self.query_one("#editor-grid", DataGrid)
-        rows = [self._display_values(index) for index in range(len(grid.fetched_rows))]
-        fmt = suffix_format(path) or "csv"
-        try:
-            text = export_rows(
-                [column.name for column in columns],
-                rows,
-                fmt=fmt,
-                options=self.clipboard_options,
-            )
-            write_text(path, text)
-        except TransferError as exc:
-            self.report_error(str(exc))
-            return
-        self.report_info(f"exported {len(rows)} row(s) to {path} as {fmt}", title="Export")
 
     # -- SQL panel (FR-5) ---------------------------------------------------
 

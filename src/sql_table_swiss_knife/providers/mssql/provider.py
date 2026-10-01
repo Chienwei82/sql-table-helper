@@ -25,7 +25,13 @@ from ..base import (
 )
 from ..dialect import ApplyOptions, SqlDialect
 from ..errors import MetadataError, QueryError
-from ..sqlgen import build_select, build_statements, sort_for_apply
+from ..sqlgen import (
+    build_select,
+    build_statements,
+    is_concurrency_conflict,
+    needs_identity_insert,
+    sort_for_apply,
+)
 from . import metadata as md
 from .connection import (
     SingleThreadRunner,
@@ -407,8 +413,8 @@ class MssqlProvider:
         results: list[StatementResult] = []
         conflicts: list[RowConflict] = []
         inserted_keys: list[RowKey] = []
-        identity_on = settings.identity_insert and any(
-            statement.kind is ChangeKind.INSERT for statement in statements
+        identity_on = needs_identity_insert(
+            table, statements, identity_insert=settings.identity_insert
         )
         await handle.afetch(self._dialect.begin_transaction())
         try:
@@ -420,7 +426,7 @@ class MssqlProvider:
                 rowcount, returned = await handle.aexecute(
                     statement.sql_parametrized, statement.param_values
                 )
-                if rowcount == 0 and change.kind in (ChangeKind.UPDATE, ChangeKind.DELETE):
+                if is_concurrency_conflict(change, rowcount):
                     conflicts.append(RowConflict(change, statement, CONFLICT_REASON))
                     results.append(StatementResult(change, statement, 0, False, CONFLICT_REASON))
                     return await self._rollback(

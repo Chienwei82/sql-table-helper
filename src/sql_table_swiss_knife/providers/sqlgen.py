@@ -594,6 +594,45 @@ def build_merge(
     return dialect.merge_sql(table.schema, table.name, identity, names, rendered)
 
 
+def is_concurrency_conflict(change: PendingChange, rowcount: int) -> bool:
+    """Whether a statement's 0-row result means a lost race rather than a no-op.
+
+    An UPDATE or DELETE that matched nothing is a concurrency conflict (FR-7.8): the row
+    was deleted, or somebody else changed it after the grid fetched it. An INSERT that
+    reports 0 is *not* a conflict — it can legitimately happen with ``OUTPUT`` and a
+    trigger, and treating it as one would abort a healthy Apply.
+
+    A decision, so it is a function over plain values rather than a branch inside the
+    driver loop, and can be tested without a fake driver.
+    """
+    return rowcount == 0 and change.kind in (ChangeKind.UPDATE, ChangeKind.DELETE)
+
+
+def needs_identity_insert(
+    table: Table,
+    statements: Sequence[SqlStatement],
+    *,
+    identity_insert: bool,
+) -> bool:
+    """Whether ``SET IDENTITY_INSERT`` must bracket these statements.
+
+    ``SET IDENTITY_INSERT`` is not decoration: it is a session-wide server setting that
+    locks the table for every other session. It is required only when the caller opted in
+    *and* there is an INSERT to run *and* the target table really has an IDENTITY column —
+    on a table without one it is a runtime error ("Table does not have the identity
+    property"), which would fail an Apply that the generated script shows as valid.
+
+    Both :func:`build_script` and ``MssqlProvider.execute_changes`` ask this question, and
+    they must get the same answer: the script shown to the user is the script that runs.
+    Note ``Table.identity_columns`` means *row identity* (the PK), which is unrelated.
+    """
+    if not identity_insert:
+        return False
+    if not any(c.is_identity for c in table.columns):
+        return False
+    return any(s.kind is ChangeKind.INSERT for s in statements)
+
+
 def build_script(
     dialect: SqlDialect,
     table: Table | None,
@@ -612,23 +651,20 @@ def build_script(
     state visible to other sessions, so the script opens it exactly when needed.
     """
     body: list[str] = []
-    needs_identity = False
     for item in statements:
         if isinstance(item, str):
             text = item.rstrip().rstrip(";")
             if text:
                 body.append(text)
-            continue
-        body.append(item.sql_literal.rstrip().rstrip(";"))
-        if identity_insert and item.kind is ChangeKind.INSERT and item.row_key is None:
-            needs_identity = True
+        else:
+            body.append(item.sql_literal.rstrip().rstrip(";"))
     if not body:
         return ""
-    # `SET IDENTITY_INSERT` on a table with no IDENTITY column is a *runtime* error in SQL
-    # Server ("Table does not have the identity property"), so the pair is emitted only when
-    # the target table really has one and an INSERT needs it. Note `Table.identity_columns`
-    # means *row identity* (the PK), which is a different thing entirely.
     target = None
-    if needs_identity and table is not None and any(c.is_identity for c in table.columns):
+    if table is not None and needs_identity_insert(
+        table,
+        [s for s in statements if not isinstance(s, str)],
+        identity_insert=identity_insert,
+    ):
         target = (table.schema, table.name)
     return dialect.script_sql(SqlScript(body=tuple(body), identity_insert=target))

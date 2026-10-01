@@ -33,6 +33,8 @@ from .sqlgen import (
     build_statements,
     build_table_insert,
     build_update,
+    is_concurrency_conflict,
+    needs_identity_insert,
     sort_for_apply,
 )
 
@@ -70,7 +72,9 @@ __all__ = [
     "build_table_insert",
     "build_update",
     "get_provider",
+    "is_concurrency_conflict",
     "load_entry_point_providers",
+    "needs_identity_insert",
     "register_builtin_providers",
     "register_provider",
     "sort_for_apply",

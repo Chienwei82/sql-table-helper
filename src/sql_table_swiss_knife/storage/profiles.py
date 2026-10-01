@@ -4,7 +4,6 @@ Passwords are stored exclusively in the OS keyring (or prompted per session); a
 ``password``/``pwd`` key in the file is rejected loudly at load time.
 """
 
-import os
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -18,7 +17,7 @@ from ..domain.connection import (
     Environment,
 )
 from ..infra.errors import AppError
-from .paths import profiles_path
+from .paths import atomic_write, profiles_path
 
 __all__ = ["ProfileError", "ProfileStore"]
 
@@ -252,12 +251,7 @@ class ProfileStore:
         if duplicates:
             raise ProfileError(f"duplicate profile name(s): {sorted(duplicates)}")
         document = {"profile": [_profile_to_table(profile) for profile in profiles]}
-        text = tomli_w.dumps(document)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.chmod(tmp, 0o600)  # owner-only: no passwords inside, but keep the file tight
-        os.replace(tmp, self._path)
+        atomic_write(self._path, tomli_w.dumps(document))
 
     def get(self, name: str) -> ConnectionProfile:
         """Look up one profile by exact name.

@@ -1,44 +1,34 @@
 """Services: the layer the TUI talks to (DESIGN §2).
 
-Services own I/O orchestration — profile lifecycle, connections, catalog reads —
-and return domain objects. They are the only layer that touches ``storage`` and
-``providers``; the TUI never imports a provider or a driver directly.
+Services own orchestration — profile lifecycle, connections, catalog reads, staging and
+apply — and return domain objects. They are the only layer that touches ``storage`` and
+``providers``; the TUI never imports a provider or a driver directly, and never touches
+the filesystem.
 
-M3 landed two services:
+This package re-exports the service surface the screens consume, so a screen imports from
+``services`` rather than reaching into a submodule. What each one is responsible for:
 
-* :class:`~sql_table_swiss_knife.services.connection.ConnectionService` — profile
-  CRUD, test/connect/disconnect, and the session state shown in the UI.
-* :class:`~sql_table_swiss_knife.services.catalog.CatalogService` — databases,
-  tables/views and table metadata, with a per-session cache.
+* :mod:`~sql_table_swiss_knife.services.connection` — profile CRUD, connect/disconnect,
+  and the session state the UI shows.
+* :mod:`~sql_table_swiss_knife.services.catalog` — databases, tables/views and table
+  metadata, with a per-session cache.
+* :mod:`~sql_table_swiss_knife.services.data` — paged row fetching, deterministic
+  ordering and "fetch more" (FR-3.8).
+* :mod:`~sql_table_swiss_knife.services.changes` — the staging buffer. It has no
+  connection and cannot reach a database: nothing is written before Apply.
+* :mod:`~sql_table_swiss_knife.services.sqlpreview` — the SQL panel's text, produced from
+  the same ``SqlStatement`` objects the provider executes, so the preview cannot drift
+  from what runs (FR-5.4).
+* :mod:`~sql_table_swiss_knife.services.clipboard` — copy encoding and paste *planning*:
+  what will be UPDATED and what INSERTed, decided before anything is staged (FR-4.1-4.7).
+* :mod:`~sql_table_swiss_knife.services.lookup` — the foreign-key candidate list.
+* :mod:`~sql_table_swiss_knife.services.safety` — the environment posture that the header
+  badge and the write gate both read, so they cannot disagree.
+* :mod:`~sql_table_swiss_knife.services.validation` — live per-cell type checking.
+* :mod:`~sql_table_swiss_knife.services.inspector` — the schema panel's view model.
 
-M4 adds the read side of the workspace:
-
-* :class:`~sql_table_swiss_knife.services.data.DataService` — paged row fetching with
-  the deterministic order and the "fetch more" semantics behind FR-3.8/S-8.
-* :class:`~sql_table_swiss_knife.services.inspector.InspectorService` — which table and
-  column the schema panel is showing, plus the derived view model (summary, warnings,
-  badges, column detail) built by the pure functions in that module.
-* :mod:`sql_table_swiss_knife.services.validation` — live per-cell type validation for
-  the editor that lands with M5.
-
-M6 adds the SQL side of the workspace:
-
-* :mod:`sql_table_swiss_knife.services.sqlpreview` — the three renderings (parameterized,
-  literal, script), the panel's copy targets and the "generate SQL for…" builders. Pure
-  functions over the same ``SqlStatement`` objects the provider executes, so the preview
-  cannot drift from what runs (FR-5.4), and it has no I/O at all: the panel never executes
-  anything (S-1).
-M7 adds the clipboard, which is the milestone where "edit without writing SQL" starts
-including bulk work:
-
-* :mod:`sql_table_swiss_knife.services.clipboard` — pure encoding, parsing and paste
-  *planning*: TSV/CSV/JSON out, TSV/CSV/JSON/JSON in, header detection, per-locale
-  conversion, and a :class:`~services.clipboard.PastePlan` that says exactly which rows
-  will be UPDATED and which INSERTed before anything is staged (FR-4.1-4.7).
-* :mod:`sql_table_swiss_knife.services.transfer` — CSV/JSON import and export built on the
-  same pipeline, so a file can never be validated differently from a paste.
-* :mod:`sql_table_swiss_knife.infra.clipboard` — the copy backend chain (pyperclip,
-  platform tools, then OSC 52 so copying works over SSH).
+Decisions belong here as pure functions over plain values: "is this Apply allowed?", "what
+will this paste do?" Each module's own docstring is the authority for its behaviour.
 """
 
 from .catalog import (
