@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import ClassVar
 
@@ -334,16 +334,26 @@ class TableEditorScreen(AppScreen):
             return []
         return [row_key_for(self._table, row.values) for row in self._window.rows]
 
-    def _refresh_overlay(self) -> None:
-        """Redraw the staged values and states over the fetched rows (FR-3.7)."""
+    def _refresh_overlay(self, rows: Collection[int] | None = None) -> None:
+        """Redraw the staged values and states over the fetched rows (FR-3.7).
+
+        ``rows`` limits the repaint to the row a stage just changed. Only staged rows can
+        differ from what was fetched, so a keystroke costs O(columns) instead of walking
+        every cell of the window; ``None`` repaints everything, which is what a reload or
+        a column change needs.
+        """
         grid = self.query_one("#editor-grid", DataGrid)
         changes = self._changes
         if changes is None:
             return
+        indexes = range(grid.row_count) if rows is None else rows
         statuses: dict[tuple[RowKey | None, str], str] = {}
         values: dict[tuple[RowKey | None, str], object] = {}
-        for row_index in range(grid.row_count):
+        for row_index in indexes:
+            if not 0 <= row_index < grid.row_count:
+                continue
             key = grid.key_at(row_index)
+            row_values = grid.row_values(row_index)
             for column in grid.visible_columns:
                 status = (
                     changes.status_for(key, column.name)
@@ -355,10 +365,10 @@ class TableEditorScreen(AppScreen):
                 # overlay must publish them; only MODIFIED was published, which left a
                 # filled-in new row showing NULL.
                 if status in (CellStatus.MODIFIED, CellStatus.NEW) and key is not None:
-                    values[(key, column.name)] = changes.display_values(
-                        key, grid.row_values(row_index)
-                    ).get(column.name)
-        grid.apply_overlay(statuses, values)
+                    values[(key, column.name)] = changes.display_values(key, row_values).get(
+                        column.name
+                    )
+        grid.apply_overlay(statuses, values, rows=indexes)
 
     def _show_warning_summary(self, warnings: tuple[Warning, ...]) -> None:
         """Show the one-line severity roll-up above the grid, when there is anything to say.
@@ -598,7 +608,11 @@ class TableEditorScreen(AppScreen):
             edit = self._changes.fill_new_row(key, column.name, parsed.value)
         else:
             edit = self._changes.edit_cell(key, column.name, _render(parsed.value), original)
-        self._after_stage(edit.ok, f"{column.name} staged" if edit.ok else edit.message)
+        self._after_stage(
+            edit.ok,
+            f"{column.name} staged" if edit.ok else edit.message,
+            rows=[row_index],
+        )
 
     def _on_lookup_chosen(
         self,
@@ -616,7 +630,7 @@ class TableEditorScreen(AppScreen):
             edit = self._changes.fill_new_row(key, column.name, value)
         else:
             edit = self._changes.stage_value(key, column.name, value, original)
-        self._after_stage(edit.ok, f"{column.name} = {value!r}")
+        self._after_stage(edit.ok, f"{column.name} = {value!r}", rows=[row_index])
 
     def action_insert_row(self) -> None:
         """Stage a brand new row at the end of the grid (``ctrl+n``)."""
@@ -745,13 +759,18 @@ class TableEditorScreen(AppScreen):
             if staged.is_new
         }
 
-    def _after_stage(self, ok: bool, message: str) -> None:
-        """Redraw the overlay and the pending strip after any staging change."""
+    def _after_stage(self, ok: bool, message: str, rows: Collection[int] | None = None) -> None:
+        """Redraw the overlay and the pending strip after any staging change.
+
+        ``rows`` names the rows that changed, so the overlay repaints just those; ``None``
+        repaints the whole window, which undo/redo and discard need because they can move
+        several rows at once.
+        """
         # A generated statement is a snapshot of one row at one moment; once the staging
         # area moves, keeping it on screen would be showing SQL for a state that no longer
         # exists, so the panel falls back to the change list.
         self._sql_generated = None
-        self._refresh_overlay()
+        self._refresh_overlay(rows)
         self._refresh_pending()
         self.refresh_sql_panel()
         self.refresh_hints()

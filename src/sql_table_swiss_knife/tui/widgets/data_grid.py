@@ -14,7 +14,7 @@ the cell's class/glyph comes from :class:`CellState`. The *rules* live in
 decisions stay testable without a terminal.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import ClassVar
 
 from rich.style import Style
@@ -250,6 +250,7 @@ class DataGrid(DataTable[str]):
         self,
         statuses: Mapping[tuple[RowKey | None, str], str],
         values: Mapping[tuple[RowKey | None, str], object] | None = None,
+        rows: Collection[int] | None = None,
     ) -> None:
         """Render staged values and cell states over the fetched rows (FR-3.7).
 
@@ -257,9 +258,17 @@ class DataGrid(DataTable[str]):
             statuses: ``(row key, column) → CellState`` for the cells that are not plain.
             values: ``(row key, column) → staged value`` for the cells whose display
                 differs from what was fetched.
+            rows: the row indexes to repaint, or ``None`` for every row. A stage touches
+                one row, so passing it keeps a keystroke O(columns) rather than
+                O(rows x columns); the mappings are still keyed by row identity because
+                that is what the caller has to hand.
         """
         overlays = values or {}
-        for row_index, key in enumerate(self._keys):
+        indexes = range(len(self._keys)) if rows is None else rows
+        for row_index in indexes:
+            if not 0 <= row_index < len(self._rows):
+                continue
+            key = self._keys[row_index]
             row = self._rows[row_index]
             for column_index, column in enumerate(self._columns):
                 state = statuses.get((key, column.name), CellState.UNCHANGED)

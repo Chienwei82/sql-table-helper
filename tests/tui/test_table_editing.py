@@ -447,3 +447,36 @@ async def test_a_refused_rebind_leaves_no_phantom_rows(
         assert screen._new_rows() == {}
         assert screen.changes is not None
         assert screen.changes.is_empty is True
+
+
+async def test_staging_one_row_repaints_only_that_row(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """A keystroke must not walk every cell of the window.
+
+    ``apply_overlay`` used to repaint all rows x all columns on every stage, which is
+    O(rows x columns) of ``update_cell_at`` per keystroke. Restricting the repaint is a
+    performance claim, so it is pinned by counting the writes: the staged row must be
+    repainted and an untouched row must not be.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        await _open(app, pilot)
+        grid = _grid(app)
+        writes: list[Coordinate] = []
+        original = grid.update_cell_at
+
+        def counting_update(
+            coordinate: Coordinate, value: object, *, update_width: bool = False
+        ) -> None:
+            writes.append(coordinate)
+            original(coordinate, value, update_width=update_width)  # type: ignore[arg-type]
+
+        grid.update_cell_at = counting_update  # type: ignore[method-assign]
+        before = len(writes)
+        await _stage_name(app, pilot, "Bayern")
+
+        touched_rows = {c.row for c in writes[before:]}
+        assert 0 in touched_rows, "the staged row was not repainted"
+        assert touched_rows == {0}, f"rows outside the edit were repainted: {sorted(touched_rows)}"
