@@ -290,3 +290,31 @@ async def test_escape_cancels_without_applying(
         await pilot.press("escape")
         await pilot.pause()
         assert results == [False]
+
+
+async def test_the_services_bundle_is_built_once_and_stays_live(
+    app_factory: AppFactory, seeded_profiles: ProfileStore, provider: FakeProvider
+) -> None:
+    """A cached bundle must not become a stale snapshot of the session's services.
+
+    ``App.services`` rebuilt the bundle — and a ``LookupService`` — on every property
+    access, and screens read it on each cursor move. Caching is only safe because the
+    collaborators are long-lived objects that are never replaced, so this pins both halves
+    of that: the bundle is the same object each time, and the policy inside it is still the
+    live one that the read-only toggle mutates.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test() as pilot:
+        first = app.services
+        assert app.services is first, "the bundle is rebuilt on every access"
+        assert app.services.lookup is first.lookup
+
+        await _open(app, pilot)
+        assert "RO" not in _badge_text(app)
+        app.action_toggle_read_only()
+        await pilot.pause()
+        # The badge and the write gate read the same SafetyPolicy object; a cached
+        # bundle holding a different one would make them disagree.
+        assert app.services.safety is app.safety
+        assert app.services.safety.read_only is True
+        assert "RO" in _badge_text(app)

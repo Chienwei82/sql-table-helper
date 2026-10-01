@@ -159,6 +159,20 @@ class SwissKnifeApp(App[None]):
         self.data = DataService(self.connection)
         self._forced_theme = initial_theme
         self._quitting = False
+        # Built once here because every one of these is a long-lived collaborator that
+        # holds no per-screen state: this property used to rebuild the bundle — and a
+        # LookupService — on every access, and screens touch it on each cursor move.
+        # `safety` is only ever mutated in place (toggle_read_only), never replaced, so a
+        # cached bundle cannot hold a stale policy. Anything that genuinely must be fresh
+        # per call is a separate property — `clipboard_service` binds Textual's own
+        # clipboard each time, on purpose.
+        self._services = AppServices(
+            connection=self.connection,
+            catalog=self.catalog,
+            data=self.data,
+            lookup=LookupService(self.connection, self.catalog),
+            safety=self.safety,
+        )
 
     # -- state --------------------------------------------------------------
 
@@ -194,14 +208,12 @@ class SwissKnifeApp(App[None]):
 
     @property
     def services(self) -> AppServices:
-        """The session services, as the screens consume them."""
-        return AppServices(
-            connection=self.connection,
-            catalog=self.catalog,
-            data=self.data,
-            lookup=LookupService(self.connection, self.catalog),
-            safety=self.safety,
-        )
+        """The session services, as the screens consume them.
+
+        Built once in ``__init__``; these collaborators hold no per-screen state, so
+        rebuilding the bundle — and a ``LookupService`` — per access was pure allocation.
+        """
+        return self._services
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Fallbacks for the semantic palette (DESIGN §9.4).
