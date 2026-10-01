@@ -5,7 +5,6 @@ settings never break an older build, while known keys are type-checked on load.
 Writes are atomic and the file is chmod 0600 like the profile store.
 """
 
-import os
 import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
@@ -14,7 +13,7 @@ from typing import Any
 import tomli_w
 
 from ..infra.errors import AppError
-from .paths import settings_path
+from .paths import atomic_write, settings_path
 
 __all__ = [
     "COPY_FORMATS",
@@ -186,11 +185,7 @@ class SettingsStore:
             value = getattr(settings, field_info.name)
             if value is not None:
                 document[field_info.name] = value
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(tomli_w.dumps(document), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self._path)
+        atomic_write(self._path, tomli_w.dumps(document))
 
     def update(self, settings: Settings, **changes: Any) -> Settings:
         """Apply keyword changes to ``settings`` and persist the result."""
