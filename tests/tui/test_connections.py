@@ -1,7 +1,8 @@
 """ConnectionsScreen flows: list, add/edit, duplicate, delete, test, connect (FR-1)."""
 
 from textual.app import App
-from textual.widgets import DataTable, Input, Static
+from textual.widget import Widget
+from textual.widgets import Button, DataTable, Input, Static
 
 from sql_table_swiss_knife.providers import ConnectError
 from sql_table_swiss_knife.services import ConnectionState
@@ -223,3 +224,92 @@ async def test_profile_editor_rejects_an_invalid_form(app_factory: AppFactory) -
         await pilot.pause()
         assert isinstance(app.screen, ProfileEditScreen)  # still open: nothing saved
         assert "port must be a number" in str(editor.query_one("#profile-hint").render())
+
+
+# -- layout of the connection form (the modal is a form, so its geometry is behaviour) --
+
+#: A terminal too short for the whole form at once. The dialog used to size itself to
+#: its content and let ``overflow-y: auto`` clip it, which pushed Cancel/Save off the
+#: bottom of an 80x24 window: the user could not tell whether the dialog had more.
+SHORT: tuple[int, int] = (80, 24)
+
+
+def _visible_on_screen(editor: ProfileEditScreen, widget: Widget) -> bool:
+    """Whether a widget's region falls inside its parent's visible region.
+
+    Compared as rectangles rather than by ``display``, because a widget scrolled out of
+    an overflowing container is still "displayed" as far as Textual is concerned — the
+    distinction is exactly the defect this guards.
+    """
+    return editor.region.contains_region(widget.region)
+
+
+async def test_profile_editor_keeps_its_actions_visible_on_a_short_terminal(
+    app_factory: AppFactory,
+) -> None:
+    """The Save/Cancel buttons must be on screen even when the fields are not.
+
+    Clipped action buttons are worse than an ugly form: the dialog looks complete and
+    ``ctrl+s`` is the only visible way out, which a mouse user never finds.
+    """
+    app = app_factory()
+    async with app.run_test(size=SHORT) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        editor = app.screen
+        assert isinstance(editor, ProfileEditScreen)
+        for selector in ("#save", "#cancel"):
+            button = editor.query_one(selector, Button)
+            assert _visible_on_screen(editor, button), f"{selector} is clipped off the modal"
+
+
+async def test_profile_editor_form_controls_share_one_column(app_factory: AppFactory) -> None:
+    """Every field control starts at the same x — the form reads as one column.
+
+    The grid declared three columns but sized only two, so cells filled
+    ``[label, input, label]`` and the second control of each pair started in the label
+    column. The visible result was a zig-zag with alternating field widths.
+    """
+    app = app_factory()
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        editor = app.screen
+        assert isinstance(editor, ProfileEditScreen)
+        # Text inputs only: a Select is three rows tall and its box, not its text, is
+        # what this asserts on, so including it would test the wrong edge.
+        lefts = {
+            editor.query_one(selector, Input).region.x
+            for selector in ("#f-name", "#f-provider", "#f-host", "#f-port", "#f-username")
+        }
+        assert len(lefts) == 1, f"field controls start at {sorted(lefts)}"
+
+
+async def test_profile_editor_labels_are_not_truncated(app_factory: AppFactory) -> None:
+    """A label is fully readable, or it is a defect the user cannot report usefully.
+
+    Asserting the *rendered* width against the *assigned* width is what caught both
+    ways this breaks: a label wider than its column, and a checkbox whose long caption
+    was cut to "Force read-only (production o…".
+    """
+    app = app_factory()
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        editor = app.screen
+        assert isinstance(editor, ProfileEditScreen)
+        # A selector that matches nothing would make this pass vacuously, which is how a
+        # layout test rots: assert the census first.
+        labels = list(editor.query("Label, Checkbox"))
+        assert len(labels) == 14, f"expected the full form, found {len(labels)} captions"
+        clipped = [
+            f"{widget!r} needs {widest_line(str(widget.render()))} of {widget.region.width}"
+            for widget in labels
+            if widest_line(str(widget.render())) > widget.region.width
+        ]
+        assert clipped == []
+
+
+def widest_line(text: str) -> int:
+    """Longest line of rendered text, in cells."""
+    return max((len(line) for line in text.splitlines()), default=0)
