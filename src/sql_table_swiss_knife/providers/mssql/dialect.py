@@ -1,15 +1,34 @@
 """T-SQL (Microsoft SQL Server) dialect implementation."""
 
 import math
+import re
 from collections.abc import Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from uuid import UUID
 
 from ...domain.rows import FilterOp
-from ..dialect import Condition, SqlScript
+from ..dialect import Condition, ErrorFacts, SqlScript
 
 __all__ = ["TSqlDialect"]
+
+
+#: ``… constraint 'PK_Region'`` — the name is the most actionable part of the message.
+_CONSTRAINT_RE = re.compile(r"constraint\s+'([^']+)'", re.IGNORECASE)
+#: ``… column 'Name' …`` / ``the column 'Name'`` — points at the offending column.
+_COLUMN_RE = re.compile(r"column\s+'([^']+)'", re.IGNORECASE)
+
+#: Wording for each recognizable failure class, so the UI need not show raw vendor text.
+_KIND_HINTS: tuple[tuple[str, str, str], ...] = (
+    ("foreign key", "fk", "referenced row is missing or still in use"),
+    ("cannot insert the value null", "not-null", "the column does not accept NULL"),
+    ("duplicate key", "unique", "another row already has this value"),
+    ("violation of unique", "unique", "another row already has this value"),
+    ("string or binary data would be truncated", "truncation", "the value is too long"),
+    ("conversion failed", "conversion", "the value is not valid for the column type"),
+    ("is not a valid value", "conversion", "the value is not valid for the column type"),
+    ("check constraint", "check", "a CHECK constraint rejected the value"),
+)
 
 
 #: ``bigint`` range — the widest integer SQL Server parses, so the widest integer literal.
@@ -51,6 +70,25 @@ class TSqlDialect:
         if index < 0:
             raise ValueError(f"placeholder index must be >= 0, got {index}")
         return f"@p{index}"
+
+    def escape_like(self, text: str) -> str:
+        return escape_like(text)
+
+    def inspect_error(self, message: str) -> ErrorFacts:
+        constraint = _CONSTRAINT_RE.search(message)
+        column = _COLUMN_RE.search(message)
+        lowered = message.lower()
+        kind, hint = "error", ""
+        for needle, name, explanation in _KIND_HINTS:
+            if needle in lowered:
+                kind, hint = name, explanation
+                break
+        return ErrorFacts(
+            kind=kind,
+            hint=hint,
+            constraint=constraint.group(1) if constraint is not None else None,
+            column=column.group(1) if column is not None else None,
+        )
 
     def literal(self, value: object) -> str:
         """Render a copy-ready T-SQL literal (display only — execution uses parameters).
@@ -375,3 +413,13 @@ class TSqlDialect:
             else f"{self.quote_ident(condition.column)} = {condition.rendered}"
             for condition in conditions
         )
+
+
+def escape_like(text: str) -> str:
+    """Escape LIKE wildcards so a typed ``%`` matches a literal percent sign.
+
+    SQL Server escapes a LIKE metacharacter with brackets, so ``%`` becomes ``[%]``.
+    Building the result in a single pass matters: escaping ``[`` first and ``]`` after
+    would re-escape the brackets this function just introduced.
+    """
+    return "".join("[" + char + "]" if char in ("%", "_", "[", "]") else char for char in text)

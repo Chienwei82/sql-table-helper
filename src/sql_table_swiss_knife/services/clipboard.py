@@ -274,11 +274,30 @@ def _parse_json(text: str) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]
                         header.append(str(name))
             rows = tuple(tuple(_json_cell(item.get(name)) for name in header) for item in document)
             return rows, tuple(header)
-        return tuple(tuple(_json_cell(value) for value in row) for row in document), None
+        # A JSON array of scalars is one cell per row, and a mixed array pads each row out
+        # to the block width. Iterating a scalar element directly would raise TypeError,
+        # which is not a failure mode the user can act on.
+        return _rows_of_cells(document), None
     if isinstance(document, dict):
         single_header = tuple(str(name) for name in document)
         return (tuple(_json_cell(value) for value in document.values()),), single_header
     return ((str(document),),), None
+
+
+def _rows_of_cells(document: Sequence[object]) -> tuple[tuple[str, ...], ...]:
+    """A JSON array rendered as block rows: scalars become one cell, lists become a row.
+
+    Every row is padded to the width of the widest, matching how the delimited parsers
+    build a rectangular block, so a ragged document cannot produce a short row.
+    """
+    rows = [
+        (_json_cell(item),)
+        if not isinstance(item, list | tuple)
+        else tuple(_json_cell(value) for value in item)
+        for item in document
+    ]
+    width = max((len(row) for row in rows), default=0)
+    return tuple(row + ("",) * (width - len(row)) for row in rows)
 
 
 def _json_cell(value: object) -> str:
@@ -894,11 +913,15 @@ def _resolve_columns(
         # A positional row insert must never write identity/computed columns implicitly:
         # the user has not opted into IDENTITY_INSERT (S-3), and a computed column cannot
         # be written at all.
-        identity = set(target.table.identity_columns)
+        #
+        # The row *key* is deliberately NOT excluded here. `identity_columns` is row
+        # identity (the PK, else a single-column UNIQUE — see domain/catalog.py), not the
+        # SQL Server IDENTITY property, so S-3 does not apply to it. Excluding it silently
+        # dropped the key from every positional block, which turned "update these rows"
+        # into "insert duplicates of them": the pasted key no longer matched anything.
+        # `_plan_rows` decides UPDATE vs INSERT from the mapped columns and reports which.
         columns = [
-            None
-            if column is not None and (column.is_server_managed or column.name in identity)
-            else column
+            None if column is not None and column.is_server_managed else column
             for column in columns
         ]
     named = tuple(

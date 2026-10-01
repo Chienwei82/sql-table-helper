@@ -22,6 +22,7 @@ from enum import Enum
 
 from ..domain.catalog import Column, Table
 from ..domain.rows import FilterOp, RowFilter, SortKey
+from ..providers.dialect import SqlDialect
 
 __all__ = [
     "FilterMode",
@@ -76,7 +77,7 @@ class QuickFilter:
         return f"{self.column} {self.mode.label} '{self.text}'"
 
 
-def filter_for(filters: Iterable[QuickFilter]) -> tuple[RowFilter, ...]:
+def filter_for(filters: Iterable[QuickFilter], dialect: SqlDialect) -> tuple[RowFilter, ...]:
     """Turn the quick filters into server-side predicates (FR-3.3).
 
     ``CONTAINS`` becomes ``LIKE '%text%'`` (a server-side substring search, so it also
@@ -88,28 +89,12 @@ def filter_for(filters: Iterable[QuickFilter]) -> tuple[RowFilter, ...]:
         if quick.is_empty:
             continue
         value: object = (
-            f"%{_escape_like(quick.text.strip())}%"
+            f"%{dialect.escape_like(quick.text.strip())}%"
             if quick.mode is FilterMode.CONTAINS
             else quick.text
         )
         predicates.append(RowFilter(column=quick.column, operator=quick.mode.operator, value=value))
     return tuple(predicates)
-
-
-def _escape_like(text: str) -> str:
-    """Escape LIKE wildcards so a typed ``%`` matches a literal percent sign.
-
-    SQL Server escapes a LIKE metacharacter with brackets, so ``%`` becomes ``[%]``.
-    Building the result in a single pass matters: escaping ``[`` first and ``]`` after
-    would re-escape the brackets this function just introduced.
-    """
-    escaped = []
-    for char in text:
-        if char in ("%", "_", "[", "]"):
-            escaped.append("[" + char + "]")
-        else:
-            escaped.append(char)
-    return "".join(escaped)
 
 
 def toggle_sort(sort: Sequence[SortKey], column: str) -> tuple[SortKey, ...]:
@@ -177,9 +162,9 @@ class GridView:
     def is_filtered(self) -> bool:
         return any(not quick.is_empty for quick in self.filters)
 
-    def predicates(self) -> tuple[RowFilter, ...]:
-        """The server-side filters this view implies."""
-        return filter_for(self.filters)
+    def predicates(self, dialect: SqlDialect) -> tuple[RowFilter, ...]:
+        """The server-side filters this view implies, in this dialect's LIKE syntax."""
+        return filter_for(self.filters, dialect)
 
     def sort_for(self, table: Table) -> tuple[SortKey, ...]:
         """The ORDER BY for a fetch, defaulting to the table's identity columns."""

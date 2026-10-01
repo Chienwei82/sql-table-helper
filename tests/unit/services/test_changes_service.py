@@ -22,6 +22,8 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
+from sql_table_swiss_knife.providers.dialect import ErrorFacts
+from sql_table_swiss_knife.providers.mssql import TSqlDialect
 from sql_table_swiss_knife.services import (
     ApplyError,
     CellStatus,
@@ -30,6 +32,9 @@ from sql_table_swiss_knife.services import (
     map_database_error,
 )
 from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+
+#: Error wording is the dialect's job; these tests pin SQL Server's.
+DIALECT = TSqlDialect()
 
 COUNTRY = Table(
     schema="dbo",
@@ -477,6 +482,7 @@ def test_a_foreign_key_error_names_the_constraint_and_the_row() -> None:
         "The INSERT statement conflicted with the FOREIGN KEY constraint 'FK_Region_Country'.",
         COUNTRY,
         change,
+        DIALECT,
     )
     assert mapped.constraint == "FK_Region_Country"
     assert mapped.kind == "fk"
@@ -484,7 +490,7 @@ def test_a_foreign_key_error_names_the_constraint_and_the_row() -> None:
 
 
 def test_an_error_without_a_change_still_maps() -> None:
-    mapped = map_database_error("something went wrong", COUNTRY, None)
+    mapped = map_database_error("something went wrong", COUNTRY, None, DIALECT)
 
     assert mapped.row_key is None
     assert mapped.column is None
@@ -500,7 +506,7 @@ def test_an_error_without_a_change_still_maps() -> None:
     ],
 )
 def test_the_column_named_in_the_message_wins(message: str, expected_column: str) -> None:
-    assert map_database_error(message, COUNTRY, None).column == expected_column
+    assert map_database_error(message, COUNTRY, None, DIALECT).column == expected_column
 
 
 def test_a_delete_error_has_no_guessed_column() -> None:
@@ -512,7 +518,7 @@ def test_a_delete_error_has_no_guessed_column() -> None:
         key=(("Code", "DE"),),
         before={"Code": "DE"},
     )
-    mapped = map_database_error("could not delete the row", COUNTRY, delete)
+    mapped = map_database_error("could not delete the row", COUNTRY, delete, DIALECT)
 
     assert mapped.column is None
     assert mapped.row_key == (("Code", "DE"),)
@@ -564,3 +570,30 @@ async def test_rebinding_a_different_table_is_refused(tmp_path: Path) -> None:
     assert changes.rebind(other) is False
     # The caller rebuilds on a refusal, so the service must not pretend it moved.
     assert changes.table is COUNTRY
+
+
+def test_error_wording_is_the_dialects_not_the_services() -> None:
+    """The seam that a second provider needs: message classification is pluggable.
+
+    ``services`` used to carry SQL Server's error strings, which meant no other DBMS could
+    be described. A dialect that recognises nothing must still produce a usable error.
+    """
+
+    class DeafDialect(TSqlDialect):
+        def inspect_error(self, message: str) -> ErrorFacts:
+            return ErrorFacts()
+
+    message = "The INSERT statement conflicted with the FOREIGN KEY constraint 'FK_x'."
+    mapped = map_database_error(message, COUNTRY, None, DeafDialect())
+
+    assert mapped.kind == "error"
+    assert mapped.constraint is None
+    assert mapped.message == message  # nothing recognised, so nothing claimed
+
+
+def test_a_missing_dialect_degrades_instead_of_raising() -> None:
+    """No session means no dialect; that must not turn an error into a crash."""
+    mapped = map_database_error("something went wrong", COUNTRY, None)
+
+    assert mapped.message == "something went wrong"
+    assert mapped.kind == "error"

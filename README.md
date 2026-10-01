@@ -539,8 +539,10 @@ Stated plainly, because a list of them is more useful than a claim of completene
   and the test suite does not cover it. It also does not bundle unixODBC or the Microsoft
   ODBC driver — those must be installed on the target machine.
 - **One DBMS.** SQL Server. The seams for others are real and documented
-  ([docs/ADDING_A_PROVIDER.md](docs/ADDING_A_PROVIDER.md)), but no second provider has been
-  written against them, so treat that guide as a design, not as a proven recipe.
+  ([docs/ADDING_A_PROVIDER.md](docs/ADDING_A_PROVIDER.md)) — SQL text, `LIKE` escaping and
+  driver-error classification all sit on `SqlDialect` rather than in `services/` — but no
+  second provider has been written against them, so treat that guide as a design, not as a
+  proven recipe.
 - **The audit log is a local file.** It is append-only by convention only — anybody with
   write access to the config directory can edit it. It is a record of what the tool did,
   not a compliance system.

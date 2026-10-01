@@ -29,7 +29,6 @@ the row and column the database actually complained about, so the UI can point a
 offending cell.
 """
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -44,6 +43,7 @@ from ..domain.changes import (
 )
 from ..domain.rows import RowKey
 from ..providers import ApplyOptions, ExecuteResult, RowConflict, SqlStatement, build_statements
+from ..providers.dialect import ErrorFacts, SqlDialect
 from ..providers.errors import QueryError
 from .clipboard import PastePlan, RowOutcome
 from .connection import ConnectionService
@@ -112,58 +112,32 @@ class MappedError:
         return f"{self.message} ({where})" if where else self.message
 
 
-#: ``… constraint 'PK_Region'`` — the name is the most actionable part of the message.
-_CONSTRAINT_RE = re.compile(r"constraint\s+'([^']+)'", re.IGNORECASE)
-#: ``… column 'Name' …`` / ``the column 'Name'`` — points at the offending column.
-_COLUMN_RE = re.compile(r"column\s+'([^']+)'", re.IGNORECASE)
-
-#: Wording for each recognizable failure class, so the UI does not show raw vendor text.
-_KIND_HINTS: tuple[tuple[str, str, str], ...] = (
-    ("foreign key", "fk", "referenced row is missing or still in use"),
-    ("cannot insert the value null", "not-null", "the column does not accept NULL"),
-    ("duplicate key", "unique", "another row already has this value"),
-    ("violation of unique", "unique", "another row already has this value"),
-    ("string or binary data would be truncated", "truncation", "the value is too long"),
-    ("conversion failed", "conversion", "the value is not valid for the column type"),
-    ("is not a valid value", "conversion", "the value is not valid for the column type"),
-    ("check constraint", "check", "a CHECK constraint rejected the value"),
-)
-
-
 def map_database_error(
-    message: str, table: Table, change: PendingChange | None = None
+    message: str,
+    table: Table,
+    change: PendingChange | None = None,
+    dialect: SqlDialect | None = None,
 ) -> MappedError:
     """Attribute a database error to a row/column of ``table``.
 
     The row comes from the failing :class:`PendingChange` (the Apply result knows which
-    statement failed); the column is read out of the driver message when it names one,
-    and otherwise falls back to the first column the statement would have written — which
-    is the best guess available and is labelled as such by the caller.
+    statement failed). Classifying the *message* is the dialect's job — which wording means
+    "duplicate key" is vendor-specific — so this only asks, and supplies the fallback: the
+    first column the statement would have written, which is the best guess the change
+    itself allows and is labelled as such by the caller.
 
     Nothing here raises: a message that matches nothing is still a usable
-    :class:`MappedError`, just without a column.
+    :class:`MappedError`, just without a column. A missing dialect degrades to the raw
+    message rather than failing, so a caller without a connection still gets a result.
     """
-    constraint = _CONSTRAINT_RE.search(message)
-    column_match = _COLUMN_RE.search(message)
-    column_name = column_match.group(1) if column_match is not None else None
-    kind = "error"
-    hint = ""
-    lowered = message.lower()
-    for needle, name, explanation in _KIND_HINTS:
-        if needle in lowered:
-            kind = name
-            hint = explanation
-            break
-    if column_name is None:
-        # No column named in the message: fall back to the first column the failing
-        # statement writes, which is the best guess the change itself allows.
-        column_name = _first_written_column(change)
+    facts = dialect.inspect_error(message) if dialect is not None else ErrorFacts()
+    column_name = facts.column or _first_written_column(change)
     return MappedError(
-        message=hint or message,
+        message=facts.hint or message,
         row_key=change.key if change is not None else None,
         column=column_name,
-        constraint=constraint.group(1) if constraint is not None else None,
-        kind=kind,
+        constraint=facts.constraint,
+        kind=facts.kind,
     )
 
 
@@ -604,15 +578,24 @@ class ChangeService:
             )
         except QueryError as exc:
             # A connection-level or statement-build error: nothing ran, keep staging.
-            mapped = map_database_error(str(exc), self._table)
+            mapped = map_database_error(str(exc), self._table, None, self._dialect())
             empty = ExecuteResult(committed=False, results=(), duration_ms=0, failed_index=0)
             raise ApplyError(mapped.describe(), empty, mapped=mapped) from exc
         if not result.committed:
             change = self._failed_change(result)
-            mapped = map_database_error(result.error or "apply failed", self._table, change)
+            mapped = map_database_error(
+                result.error or "apply failed", self._table, change, self._dialect()
+            )
             raise ApplyError(mapped.describe(), result, mapped=mapped)
         self.changes.clear()
         return result
+
+    def _dialect(self) -> SqlDialect | None:
+        """The connected provider's dialect, or ``None`` when there is no session."""
+        try:
+            return self._connection.provider().dialect
+        except RuntimeError, LookupError:
+            return None
 
     def _failed_change(self, result: ExecuteResult) -> PendingChange | None:
         """The staged change the provider reported as failing, when it named one."""
