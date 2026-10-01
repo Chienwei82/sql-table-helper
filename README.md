@@ -100,8 +100,6 @@ transaction guarantee, and a word that must be typed.
 ## Install
 
 ```bash
-uv tool install sql-table-swiss-knife     # from PyPI
-# or, from a checkout
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
@@ -113,7 +111,41 @@ Requires Python 3.14. To connect you also need an **ODBC driver manager** and th
 
 **Behind a corporate proxy?** `uv` does its own TLS, so a proxy that intercepts with a
 private CA fails `uv sync` in a way `pip` would not. See
-[docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md).
+[docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md), and the `uv pip` route below.
+
+> The package is **not published on PyPI yet**, so the `uv tool install
+> sql-table-swiss-knife` line that used to sit here does not work. Install from a
+> checkout, or build a wheel with `uv build` and install the result.
+
+### Installing with `uv pip` instead of `uv sync`
+
+Useful behind a corporate mirror, where a lockfile pinning exact versions is more
+likely to be a problem than a help:
+
+```bash
+uv venv                                  # create the environment first
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
+uv pip install -e .                      # runtime only
+uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
+uv pip install -e ".[clipboard]"         # + the better clipboard backend
+sql-table-swiss-knife                    # or the short alias: stsk
+```
+
+Two things to know, both of which will bite you otherwise:
+
+- **`--group dev` is not implied.** Without it you get the six runtime dependencies and
+  no test or lint tooling at all — `pytest` is simply absent, not merely out of date.
+- **Activate the venv; do not use `uv run`.** Inside an activated venv `uv run` leaves
+  your environment alone. Outside it, `uv run` re-syncs from `uv.lock` first and will
+  uninstall whatever `uv pip` installed that the lock does not mention. To freeze what
+  you resolved, export it rather than committing it (`requirements.txt` is deliberately
+  not part of this project):
+
+  ```bash
+  uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
+  ```
+
+Neither route installs the ODBC driver — that is a system package, not a Python one.
 
 A **single-file** build is also supported for locked-down machines and for dropping the
 app onto a server without touching its Python:

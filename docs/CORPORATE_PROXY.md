@@ -73,6 +73,39 @@ mirrors packages internally:
 export UV_DEFAULT_INDEX="https://artifacts.corp.example/api/pypi/pypi/simple"
 ```
 
+### If the lockfile fights the mirror
+
+`uv sync` installs the exact versions in `uv.lock`, pinned when it was generated. A
+mirror that carries newer or older builds than the lock names will fail, and no amount
+of CA configuration fixes that. `uv pip` resolves against whatever the index has right
+now, which is usually what you want on a corporate network:
+
+```bash
+uv venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+uv pip install -e . --index-url https://artifacts.corp.example/api/pypi/pypi/simple
+```
+
+Two details that are not obvious:
+
+- **`--group dev` is not implied.** `uv pip install -e .` installs the six runtime
+  dependencies and nothing else — no `pytest`, no `ruff`, no `mypy`. Add
+  `uv pip install -e . --group dev` for the full quality gate suite.
+- **Activate the venv before using `uv run`.** Inside an activated venv, `uv run` leaves
+  your environment alone. Outside it, `uv run` re-syncs from `uv.lock` and uninstalls
+  whatever `uv pip` installed that the lock does not mention — the two tools quietly
+  fight over the same directory.
+
+To pin what you resolved without committing a `requirements.txt` (this project
+deliberately has none), export it:
+
+```bash
+uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
+```
+
+Neither route installs the ODBC driver: `unixODBC` and the Microsoft ODBC Driver 18 are
+system packages, and need a base image or elevated privileges.
+
 ## Slow links
 
 ```bash

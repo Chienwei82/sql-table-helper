@@ -105,8 +105,6 @@ lectura.
 ## Instalación
 
 ```bash
-uv tool install sql-table-swiss-knife     # desde PyPI
-# o, desde una copia del repositorio
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
@@ -118,7 +116,43 @@ Requiere Python 3.14. Para conectarte también necesitas un **gestor de drivers 
 
 **¿Detrás de un proxy corporativo?** `uv` hace su propio TLS, así que un proxy que
 intercepta con una CA privada hace fallar `uv sync` de un modo que `pip` no tendría.
-Consulta [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md).
+Consulta [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md) y la vía con `uv pip` de abajo.
+
+> El paquete **aún no está publicado en PyPI**, así que la línea `uv tool install
+> sql-table-swiss-knife` que antes estaba aquí no funciona. Instala desde una copia del
+> repositorio, o genera un wheel con `uv build` e instala el resultado.
+
+### Instalar con `uv pip` en lugar de `uv sync`
+
+Útil detrás de un mirror corporativo, donde un lockfile que fija versiones exactas suele
+ser más un problema que una ayuda:
+
+```bash
+uv venv                                  # crear primero el entorno
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
+uv pip install -e .                      # solo dependencias de ejecución
+uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
+uv pip install -e ".[clipboard]"         # + el mejor backend de portapapeles
+sql-table-swiss-knife                    # o el alias corto: stsk
+```
+
+Dos cosas que conviene saber, porque si no te van a dar un disgusto:
+
+- **`--group dev` no se implica.** Sin él obtienes las seis dependencias de ejecución y
+  **ninguna** herramienta de pruebas o lint — `pytest` simplemente no está, no es que esté
+  desactualizado.
+- **Activa el venv; no uses `uv run`.** Dentro de un venv activado, `uv run` deja tu
+  entorno intacto. Fuera de él, `uv run` resincroniza primero desde `uv.lock` y
+  desinstalará todo lo que instalara `uv pip` y el lock no mencione. Para congelar lo que
+  has resuelto, expórtalo en lugar de commitearlo (aquí no hay `requirements.txt` a
+  propósito):
+
+  ```bash
+  uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
+  ```
+
+Ninguna de las dos vías instala el driver ODBC — eso es un paquete del sistema, no de
+Python.
 
 También se admite una compilación de **un solo archivo** para máquinas restringidas y para
 dejar la aplicación en un servidor sin tocar su Python:
