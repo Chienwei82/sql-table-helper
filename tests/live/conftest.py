@@ -119,3 +119,112 @@ async def live_connection(live_server: LiveServer, mssql_provider: Any) -> Async
         yield conn
     finally:
         await mssql_provider.disconnect(conn)
+
+
+@pytest.fixture
+async def clean_slate(live_connection: Any) -> AsyncIterator[None]:
+    """Restore the fixture data after a test that writes.
+
+    The write tests must not depend on order or on a freshly seeded database, so every
+    table they touch is truncated and re-seeded before *and* after the test. Restoring
+    before matters as much as after: a previous aborted run must not poison this one.
+    """
+    await _reset(live_connection)
+    try:
+        yield
+    finally:
+        await _reset(live_connection)
+
+
+#: Tables the live write tests are allowed to modify, with the rows they must contain.
+#: dbo.Region/RegionAlias/AuditLog are left to the seed script on purpose: the region
+#: fixtures carry a self-referencing FK, so truncating them in the wrong order breaks
+#: the parent relationship. Tests that touch them delete only the rows they created.
+_RESET_STATEMENTS: tuple[str, ...] = (
+    "DELETE FROM [dbo].[AuditLog]",
+    # dbo.Account is system-versioned, so the history is written by the server, not
+    # inserted. Clearing it means switching versioning off for a moment: a temporal history
+    # table rejects DELETE outright ("Cannot delete rows from a temporal history table",
+    # Msg 13560). Deleting the current rows leaves the history rows behind on their own.
+    "ALTER TABLE [dbo].[Account] SET (SYSTEM_VERSIONING = OFF)",
+    "DELETE FROM [dbo].[Account]",
+    "ALTER TABLE [dbo].[Account] "
+    "SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [dbo].[AccountHistory]))",
+    "DELETE FROM [dbo].[RegionAlias]",
+    "DELETE FROM [dbo].[Region]",
+    "DELETE FROM [dbo].[Bulk]",
+    "DELETE FROM [dbo].[Simple]",
+    "DELETE FROM [dbo].[Typed]",
+    "DELETE FROM [dbo].[UniqueOnly]",
+    "DELETE FROM [dbo].[Item]",
+    "DELETE FROM [dbo].[Store]",
+    "DELETE FROM [dbo].[Supplier]",
+    "DELETE FROM [Lookups].[Weird ]]Name]",
+    "DELETE FROM [catálogos].[Moneda]",
+    "DELETE FROM [dbo].[Keyless]",
+    "DBCC CHECKDB ('SwissKnifeSample') WITH NO_INFOMSGS, PHYSICAL_ONLY",
+)
+
+_RESEED_STATEMENTS: tuple[str, ...] = (
+    # RegionId is IDENTITY, and a previous run leaves the counter wherever it finished, so
+    # the self-referencing child row has to look its parent up by key. Hardcoding 1 works
+    # only on a freshly seeded database and fails the FK as soon as the counter drifts.
+    "INSERT INTO [dbo].[Region] (CountryCode, ParentRegionId, Name, SortOrder) "
+    "VALUES (N'DE', NULL, N'Bavaria', 1)",
+    "INSERT INTO [dbo].[Region] (CountryCode, ParentRegionId, Name, SortOrder) "
+    "SELECT N'DE', RegionId, N'Munich', 2 FROM [dbo].[Region] WHERE Name = N'Bavaria'",
+    "INSERT INTO [dbo].[Region] (CountryCode, ParentRegionId, Name, SortOrder) "
+    "VALUES (N'FR', NULL, N'Normandy', 3)",
+    "INSERT INTO [dbo].[Region] (CountryCode, ParentRegionId, Name, SortOrder) "
+    "VALUES (N'JP', NULL, N'Kanto', 4)",
+    "INSERT INTO [dbo].[RegionAlias] (RegionId, Lang, Label) "
+    "SELECT RegionId, N'de', Name FROM [dbo].[Region] WHERE Name = N'Bavaria'",
+    "INSERT INTO [dbo].[RegionAlias] (RegionId, Lang, Label) "
+    "SELECT RegionId, N'en', N'Bavaria (EN)' FROM [dbo].[Region] WHERE Name = N'Bavaria'",
+    "INSERT INTO [dbo].[RegionAlias] (RegionId, Lang, Label) "
+    "SELECT RegionId, N'fr', N'Normandie' FROM [dbo].[Region] WHERE Name = N'Normandy'",
+    "INSERT INTO [dbo].[UniqueOnly] (Code, Label) VALUES (N'EUR', N'Euro'), (N'USD', N'Dollar')",
+    "INSERT INTO [dbo].[Simple] (Name, Qty) VALUES (N'with nulls', NULL), (N'populated', 7)",
+    # StoreId/Supplier are IDENTITY and the counters carry over between runs, so the child
+    # rows resolve their parents by name instead of assuming ids 1 and 1 still exist.
+    "INSERT INTO [dbo].[Supplier] (Name) VALUES (N'Acme')",
+    "INSERT INTO [dbo].[Store] (Name) VALUES (N'Berlin'), (N'Madrid')",
+    "INSERT INTO [dbo].[Item] (StoreId, Supplier, Qty) "
+    "SELECT s.StoreId, p.SupplierId, 10 FROM [dbo].[Store] AS s, [dbo].[Supplier] AS p "
+    "WHERE s.Name = N'Berlin' AND p.Name = N'Acme'; "
+    "INSERT INTO [dbo].[Item] (StoreId, Supplier, Qty) "
+    "SELECT s.StoreId, p.SupplierId, 5 FROM [dbo].[Store] AS s, [dbo].[Supplier] AS p "
+    "WHERE s.Name = N'Berlin' AND p.Name = N'Acme'",
+    "INSERT INTO [dbo].[Keyless] (PartA, PartB, Note) VALUES (1, 1, N'first'), (1, 2, N'second')",
+    # dbo.Account is system-versioned: its period columns are GENERATED ALWAYS, so only
+    # Balance is supplied and the server writes ValidFrom/ValidTo itself.
+    "INSERT INTO [dbo].[Account] (Balance) VALUES (100.00)",
+    # dbo.Typed.Flag is NOT NULL, so a long-value write cannot omit it.
+    "INSERT INTO [dbo].[Typed] (TextShort, Amount, Flag) VALUES (N'corta', 12345.6789, 1)",
+    # [Col with space] is IDENTITY: the server assigns it.
+    "INSERT INTO [Lookups].[Weird ]]Name] ([select], [Cola]]B]) VALUES (N'primero', 42)",
+    "INSERT INTO [catálogos].[Moneda] ([Código], [Descripción]) VALUES (N'EUR', N'euro')",
+)
+
+
+async def _reset(conn: Any) -> None:
+    """Truncate the writable fixture tables and put the seed rows back."""
+    for statement in _RESET_STATEMENTS:
+        await conn.afetch(statement)
+    # Reseed the identities before inserting, not after: the counters then restart from
+    # the (now empty) tables every run, so the seeded ids are the same whatever a previous
+    # run left behind and tests can assert on them.
+    for table in ("[dbo].[Region]", "[dbo].[Store]", "[dbo].[Supplier]", "[dbo].[Item]"):
+        await conn.afetch(f"DBCC CHECKIDENT ('{table}', RESEED) WITH NO_INFOMSGS")
+    for statement in _RESEED_STATEMENTS:
+        await conn.afetch(statement)
+
+
+@pytest.fixture
+async def second_connection(live_server: LiveServer, mssql_provider: Any) -> AsyncIterator[Any]:
+    """An independent connection, for proving a write is really committed on the server."""
+    conn = await mssql_provider.connect(live_server.profile(), live_server.password)
+    try:
+        yield conn
+    finally:
+        await mssql_provider.disconnect(conn)

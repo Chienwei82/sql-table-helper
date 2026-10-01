@@ -25,7 +25,9 @@ async def test_connect_and_test_connection(live_server: LiveServer, mssql_provid
     info = await mssql_provider.test_connection(live_server.profile(), live_server.password)
     assert info["database_name"] == live_server.database
     assert info["server_version"]
-    assert "SQL Server" in str(info["edition"])
+    # SERVERPROPERTY('Edition') returns e.g. "Developer Edition (64-bit)", not a product
+    # name, so asserting "SQL Server" here could never pass against a real server.
+    assert "Edition" in str(info["edition"])
 
 
 async def test_list_databases_contains_sample(live_connection: Any) -> None:
@@ -64,8 +66,20 @@ async def test_list_tables_without_schema_filter(live_connection: Any) -> None:
 
     summaries = await MssqlProvider().list_tables(live_connection)
     assert len(summaries) >= 5
-    assert all(summary.schema == "dbo" for summary in summaries)
-    assert summaries == sorted(summaries, key=lambda s: (s.schema, s.name))
+    # No filter passed, so every visible schema comes back: dbo plus the ones the
+    # fixtures add. Asserting "all dbo" only held while dbo was the sole schema.
+    assert {summary.schema for summary in summaries} >= {"dbo"}
+    assert any(summary.name == "Country" for summary in summaries)
+    # Ordering comes from the server (ORDER BY schema, name under the database collation),
+    # which is what the schema picker shows. It is deliberately not Python's sort: the
+    # collation ignores case and accents, so "catálogos" sorts before "dbo" while Python's
+    # code-point order puts it last. Assert only what is guaranteed: each schema's rows
+    # form one contiguous block, which is what the picker relies on.
+    schemas = [summary.schema for summary in summaries]
+    blocks = [
+        name for index, name in enumerate(schemas) if index == 0 or schemas[index - 1] != name
+    ]
+    assert len(blocks) == len(set(blocks)), f"schemas are not grouped: {schemas}"
 
 
 async def test_metadata_columns_exact_types(live_connection: Any) -> None:
