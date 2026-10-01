@@ -594,6 +594,20 @@ def build_merge(
     return dialect.merge_sql(table.schema, table.name, identity, names, rendered)
 
 
+def is_concurrency_conflict(change: PendingChange, rowcount: int) -> bool:
+    """Whether a statement's 0-row result means a lost race rather than a no-op.
+
+    An UPDATE or DELETE that matched nothing is a concurrency conflict (FR-7.8): the row
+    was deleted, or somebody else changed it after the grid fetched it. An INSERT that
+    reports 0 is *not* a conflict — it can legitimately happen with ``OUTPUT`` and a
+    trigger, and treating it as one would abort a healthy Apply.
+
+    A decision, so it is a function over plain values rather than a branch inside the
+    driver loop, and can be tested without a fake driver.
+    """
+    return rowcount == 0 and change.kind in (ChangeKind.UPDATE, ChangeKind.DELETE)
+
+
 def needs_identity_insert(
     table: Table,
     statements: Sequence[SqlStatement],

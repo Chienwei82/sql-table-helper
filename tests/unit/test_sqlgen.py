@@ -24,6 +24,7 @@ from sql_table_swiss_knife.providers import (
     build_statements,
     build_table_insert,
     build_update,
+    is_concurrency_conflict,
     needs_identity_insert,
     sort_for_apply,
 )
@@ -572,3 +573,31 @@ def test_needs_identity_insert_is_false_when_not_opted_in(
         options=ApplyOptions(identity_insert=True),
     )
     assert not needs_identity_insert(region_table, statements, identity_insert=False)
+
+
+def test_a_zero_row_update_or_delete_is_a_concurrency_conflict() -> None:
+    """FR-7.8: the row I fetched is no longer what the database holds."""
+    update = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=TABLE,
+        key=(("Code", "DE"),),
+        before={"Name": "Germany"},
+        after={"Name": "Deutschland"},
+    )
+    delete = PendingChange(
+        kind=ChangeKind.DELETE, table=TABLE, key=(("Code", "DE"),), before={"Name": "Germany"}
+    )
+    assert is_concurrency_conflict(update, 0)
+    assert is_concurrency_conflict(delete, 0)
+    assert not is_concurrency_conflict(update, 1), "a matched row is not a conflict"
+
+
+def test_a_zero_row_insert_is_not_a_concurrency_conflict() -> None:
+    """An INSERT reporting 0 rows must not abort an otherwise healthy Apply.
+
+    The check used to be inline in the driver loop, where the INSERT case was excluded by
+    a compound condition. Stating it as its own function keeps that from drifting, and
+    keeps the decision testable without a fake driver.
+    """
+    insert = PendingChange(kind=ChangeKind.INSERT, table=TABLE, after={"Name": "Germany"})
+    assert not is_concurrency_conflict(insert, 0)
