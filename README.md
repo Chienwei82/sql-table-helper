@@ -530,15 +530,13 @@ Stated plainly, because a list of them is more useful than a claim of completene
 
 - **Selection is keyboard-only.** `shift+arrows` works; mouse-drag selection is not wired
   into the grid, so `ctrl+c` with the *selection* scope needs the keyboard.
-- **No live pass against a real database.** Everything is covered by unit and Pilot tests
-  against `FakeProvider`. The mssql provider has unit tests for its SQL and metadata
-  mapping, and `tests/live/` exists for a real server, but the full Apply path has never
-  been driven end to end against SQL Server in this environment. **Do that before you
-  trust it with production data.**
-- **There is still no live test of Apply.** `tests/live/` covers reads, not writes: the
-  fake-driver tests never exercise real parameter binding, which is exactly how a
-  statement once shipped with more bound values than placeholders. That is the first thing
-  worth adding when a server becomes available.
+- **CSV export does not neutralise spreadsheet formula injection.** A cell whose text
+  starts with `=`, `+`, `-` or `@` is written verbatim, and the export deliberately adds
+  a UTF-8 BOM so Excel opens it as UTF-8 — so a row sourced from an untrusted upstream
+  system can execute on open. The output is not escaped, because prefixing such cells
+  would corrupt the data this tool exists to move faithfully, and silently rewriting a
+  value is a worse surprise than a documented one. Treat an export as trusted-input-only,
+  or strip the leading character in the source system.
 - **The single-file build is not CI-verified.** PyInstaller output is platform-specific
   and the test suite does not cover it. It also does not bundle unixODBC or the Microsoft
   ODBC driver — those must be installed on the target machine.

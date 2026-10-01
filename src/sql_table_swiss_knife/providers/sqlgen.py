@@ -346,17 +346,33 @@ def build_select(dialect: SqlDialect, table: Table, spec: FetchSpec) -> SelectSt
         except KeyError as exc:
             raise ValueError(f"{exc.args[0]}") from exc
     orders = [(sort_key.column, sort_key.descending) for sort_key in spec.sort]
-    after_key: list[tuple[str, str]] = []
+    offset = spec.offset
     if spec.after_key and _keyset_usable(table, spec):
+        names: list[str] = []
+        values: list[object] = []
         for name, value in spec.after_key:
             try:
                 table.column(name)
             except KeyError as exc:
                 raise ValueError(f"{exc.args[0]}") from exc
+            names.append(name)
+            values.append(value)
+        # Keyset paging continues *after* the last row of the previous page: fast on a
+        # deep page, and it neither skips nor repeats a row while the table is written
+        # to. It replaces the offset rather than adding to it.
+        #
+        # One bound value per *marker*, not per key: the predicate repeats the earlier
+        # keys of a composite key (``a > @p0 OR (a = @p0 AND b > @p1)``), and pyodbc
+        # rejects a statement whose marker count and parameter count disagree. The
+        # dialect states the marker order, so it cannot be restated here.
+        markers: list[tuple[str, str]] = []
+        for key_index in dialect.keyset_marker_order(names):
             placeholder = dialect.placeholder(index)
             index += 1
-            params.append(SqlParam(placeholder, value, name))
-            after_key.append((name, placeholder))
+            markers.append((names[key_index], placeholder))
+            params.append(SqlParam(placeholder, values[key_index], names[key_index]))
+        predicates.append(dialect.keyset_predicate_sql(markers, len(names)))
+        offset = 0
     columns = [column.name for column in table.columns]
     sql = dialect.select_rows_sql(
         table.schema,
@@ -365,8 +381,7 @@ def build_select(dialect: SqlDialect, table: Table, spec: FetchSpec) -> SelectSt
         predicates,
         orders,
         spec.limit,
-        spec.offset,
-        tuple(after_key),
+        offset,
     )
     return SelectStatement(sql=sql, params=tuple(params))
 
@@ -606,7 +621,11 @@ def build_merge(
             names.insert(0, name)
     if not names:
         return ""
-    rendered = [[dialect.literal(row[name]) for name in names] for row in rows]
+    # ``names`` is the union across the rows, so a row that simply lacks a column another
+    # row has must render it as NULL — the same rule ``build_table_insert`` follows. A
+    # direct subscript raised a bare ``KeyError`` here, escaping the "refuse with a
+    # reason" contract ``generate_for`` documents.
+    rendered = [[dialect.literal(row.get(name)) for name in names] for row in rows]
     return dialect.merge_sql(table.schema, table.name, identity, names, rendered)
 
 

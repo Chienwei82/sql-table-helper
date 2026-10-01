@@ -125,11 +125,14 @@ def _type_name(column: Column) -> str:
 
 
 def _int_limits(column: Column) -> tuple[int, int]:
-    """Inclusive value range of an integer column from its declared precision.
+    """Inclusive value range of an integer column.
 
-    ``tinyint … bigint`` map to 8/16/32/64 bits by name; a column declaring an explicit
-    precision is trusted only for ``int``-sized types, otherwise the type's own range
-    applies. ``bit`` is handled separately (0/1).
+    ``tinyint … bigint`` map to 8/16/32/64 bits *by name*, and ``int`` is always 32
+    bits. ``precision`` is deliberately ignored here: ``sys.columns.precision`` is
+    **decimal digits** (SQL Server reports 10 for ``int``, 19 for ``bigint``), not bits,
+    so treating it as a bit width capped an ``int`` column at -512…511. Precision is
+    meaningful only for ``decimal``/``numeric``, whose digits ``_digits`` counts.
+    ``bit`` is handled separately (0/1).
     """
     kind = _type_name(column)
     if kind == "tinyint":
@@ -138,10 +141,6 @@ def _int_limits(column: Column) -> tuple[int, int]:
         return -(2**15), 2**15 - 1
     if kind == "bigint":
         return -(2**63), 2**63 - 1
-    if column.precision is not None and 1 <= column.precision <= 64:
-        if kind == "tinyint":
-            return 0, 2**column.precision - 1
-        return -(2 ** (column.precision - 1)), 2 ** (column.precision - 1) - 1
     return -(2**31), 2**31 - 1
 
 

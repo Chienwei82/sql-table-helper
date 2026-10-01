@@ -157,6 +157,34 @@ def test_crlf_and_a_bom_are_normalized_away() -> None:
     assert block.header == ("Code", "Name")
 
 
+def test_a_nul_byte_is_dropped_rather_than_becoming_a_line_break() -> None:
+    """A NUL cannot be stored in a cell, but it must not *split* one into two rows.
+
+    The line-ending normalizer substituted ``\\n`` for NUL, so ``DE\\tab\\x00cd`` parsed
+    as two rows (``DE|ab`` and ``cd|``). That can flip ``choose_mode`` toward ROWS and
+    INSERT a junk row built out of half a cell.
+    """
+    block = parse_block("Code\tNote\nDE\tab\x00cd", known_columns=["Code", "Note"])
+
+    assert block.rows == (("Code", "Note"), ("DE", "abcd"))
+    assert block.ragged is False
+
+
+def test_a_trailing_blank_line_is_not_imported_as_a_row() -> None:
+    """Spreadsheet exports end with a blank line; importing it inserts empty rows."""
+    assert parse_block("a\tb\nc\td\n \n").rows == (("a", "b"), ("c", "d"))
+    assert parse_block("a,b\nc,d\n , ").rows == (("a", "b"), ("c", "d"))
+
+
+def test_a_whitespace_only_row_in_the_middle_is_kept() -> None:
+    """Only the *trailing* run is dropped: an interior space is a legitimate value."""
+    assert parse_block("Code\tNote\nDE\t \nFR\tFrance").rows == (
+        ("Code", "Note"),
+        ("DE", " "),
+        ("FR", "France"),
+    )
+
+
 def test_quoted_tsv_fields_keep_their_tab_and_newline() -> None:
     """RFC 4180 quoting: a cell with a tab or a newline stays ONE cell."""
     text = 'Code\tNote\n"DE"\t"a\tb"\n"FR"\t"line1\nline2"'

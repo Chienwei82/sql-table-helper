@@ -41,6 +41,43 @@ into conversion and planning; and the editor screen's clipboard half moved into 
 *fixed* `.tmp` sibling, so two app instances corrupted each other's writes — reproduced
 before fixing, now `storage.atomic_write` with a per-writer scratch name.
 
+**Then a second code review round that fixed eleven defects.** Every one was confirmed by
+executing the code, not by reading it, and each has a regression test verified to fail
+without the fix. Four were only reachable in production:
+
+| # | Defect | Why it survived |
+|---|---|---|
+| 1 | `sanitize_connection_string` leaked the tail of a brace-quoted password into logs (`PWD=a;b}` → `a` masked, `b}` passed through verbatim) | the test password had no `;` |
+| 2 | `_quote` did not double `{`/`}`, so a password containing `}` was truncated at the driver | only `;` was exercised |
+| 3 | the keyset-paging predicate was `(a, b) > (@p0, @p1)` — PostgreSQL syntax. T-SQL has no row-value comparison, so **every page after the first failed** on a composite-key table | the single-key case is valid by accident (`(x) > (@p0)` is only parenthesization); confirmed live as `[42000] An expression of non-boolean type` (Msg 4145) |
+| 4 | `text`/`ntext`/`image` were capped at 16 and 8 *characters*: `sys.columns.max_length` for those is the 16-byte **pointer**, not a length | `text` appeared in the tests only as an unknown-type passthrough |
+
+The rest: `IDENTITY_INSERT` was left **ON** for the session when an Apply rolled back on
+a concurrency conflict (it is a session setting, so `ROLLBACK` does not undo it — and SQL
+Server allows it for one session at a time, blocking every other session's inserts);
+`_int_limits` read `precision` as *bits* when SQL Server reports *decimal digits*, capping
+`int` at -512…511; `build_merge` raised a bare `KeyError` where its sibling
+`build_table_insert` fills the gap with `NULL`; a NUL byte in a pasted block was replaced
+with a newline, splitting one cell into two rows; a whitespace-only trailing line was
+imported as an extra row; the audit log's credential guard matched bare words, so a
+catalog table called `dbo.UserPasswordPolicy` or `dbo.Secret` **lost its compliance
+record** while the write still committed; the audit file was `chmod`ed *after* the write,
+so it was world-readable for the duration; `stage_value`/`fill_new_row` re-implemented S-3
+as `is_identity` alone, staging into computed/rowversion columns and failing the whole
+Apply instead of the one cell; and `ChangeService.rebind()` accepted refreshed metadata
+whose key column had been renamed, deferring a `ValueError` to Apply time.
+
+Two design changes came out of it. The read-only rule is now **one** predicate
+(`ChangeService._refuses`) instead of three drifting copies, and the keyset predicate
+states its own **marker order** (`keyset_marker_order`) so the rendered SQL and the bound
+values cannot disagree about the parameter count — the same "one decision, one function"
+rule that `needs_identity_insert` already followed.
+
+Two findings were **not** fixed, on purpose: CSV export does not neutralise spreadsheet
+formula injection (escaping would corrupt the data the tool exists to move faithfully, so
+it is now documented as a limitation in both READMEs), and `money`/`smallmoney` get no
+scale check (the server rounds rather than erroring).
+
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 | Project skeleton & quality gates | ✅ |

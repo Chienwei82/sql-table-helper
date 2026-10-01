@@ -50,11 +50,45 @@ def import_pyodbc() -> PyodbcModule:
     return module
 
 
+#: Keys whose value must never reach a log or a user-facing message.
+_SECRET_KEYS = frozenset({"PWD", "PASSWORD", "UID", "USER", "USER ID"})
+
+
 def _quote(value: str) -> str:
-    """Brace-quote an ODBC value containing ``;``, ``{`` or ``}``."""
+    """Brace-quote an ODBC value containing ``;``, ``{`` or ``}``.
+
+    A brace inside the value has to be doubled: the ODBC grammar closes the value at the
+    *first* unescaped ``}``, so a password ``p}w`` would otherwise be sent as ``p`` with
+    ``w}`` parsed as a bogus keyword — the driver would authenticate with the wrong
+    password rather than fail loudly.
+    """
     if any(char in value for char in ";{}"):
-        return "{" + value + "}"
+        return "{" + value.replace("}", "}}").replace("{", "{{") + "}"
     return value
+
+
+def _split_chunks(connection_string: str) -> list[str]:
+    """Split on ``;`` while keeping ``{...}`` values whole.
+
+    Splitting naively is what made :func:`sanitize_connection_string` leak: ``PWD=a;b}``
+    became ``PWD=a`` (masked) plus a bare ``b}`` chunk, and a chunk with no ``=`` looks
+    like a flag rather than a secret.
+    """
+    chunks: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in connection_string:
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+        elif char == ";" and depth == 0:
+            chunks.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    chunks.append("".join(current))
+    return chunks
 
 
 def build_connection_string(profile: ConnectionProfile, password: str | None = None) -> str:
@@ -98,16 +132,18 @@ def build_connection_string(profile: ConnectionProfile, password: str | None = N
 
 
 def sanitize_connection_string(connection_string: str) -> str:
-    """Return a log/UI-safe rendering with the password masked."""
+    """Return a log/UI-safe rendering with the password masked.
+
+    Every chunk without an ``=`` is dropped rather than passed through: an unparseable
+    chunk is exactly where a braced secret's tail used to survive (``PWD=a;b}`` split
+    naively leaves ``b}``, which has no ``=`` and so looked like a harmless flag).
+    """
     parts: list[str] = []
-    for chunk in connection_string.split(";"):
+    for chunk in _split_chunks(connection_string):
         key, separator, _ = chunk.partition("=")
         if not separator:
-            parts.append(chunk)
-        elif key.strip().upper() in {"PWD", "PASSWORD"} or key.strip().upper() in {"UID", "USER"}:
-            parts.append(f"{key}=***")
-        else:
-            parts.append(chunk)
+            continue
+        parts.append(f"{key}=***" if key.strip().upper() in _SECRET_KEYS else chunk)
     return ";".join(parts)
 
 

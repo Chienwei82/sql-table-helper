@@ -553,11 +553,14 @@ completitud:
 - **La selección es solo con teclado.** `shift`+flechas funciona; la selección arrastrando
   con el ratón no está conectada a la rejilla, así que `ctrl+c` con el alcance *selección*
   necesita el teclado.
-- **No hay una pasada en vivo contra una base de datos real.** Todo está cubierto por
-  pruebas unitarias y de Pilot contra `FakeProvider`. El proveedor mssql tiene pruebas
-  unitarias de su SQL y del mapeo de metadatos, y `tests/live/` existe para un servidor
-  real, pero la ruta completa de Apply nunca se ha ejecutado de extremo a extremo contra
-  SQL Server en este entorno. **Hazlo antes de confiarle datos de producción.**
+- **La exportación CSV no neutraliza la inyección de fórmulas en hojas de cálculo.**
+  Una celda cuyo texto empieza por `=`, `+`, `-` o `@` se escribe tal cual, y la
+  exportación añade a propósito un BOM UTF-8 para que Excel la abra como UTF-8; así, una
+  fila procedente de un sistema externo no confiable puede ejecutarse al abrirla. No se
+  escapa la salida porque anteponer un carácter a esas celdas corrompería los datos que
+  esta herramienta existe para mover con fidelidad, y reescribir un valor en silencio es
+  una sorpresa peor que una documentada. Trata una exportación como entrada de confianza,
+  o elimina el carácter inicial en el sistema de origen.
 - **La compilación de un solo archivo no está verificada en CI.** La salida de PyInstaller
   es específica de cada plataforma y la suite de pruebas no la cubre. Tampoco incluye
   unixODBC ni el driver ODBC de Microsoft — hay que instalarlos en la máquina de destino.

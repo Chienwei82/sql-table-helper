@@ -14,6 +14,7 @@ reaches the file, so a future caller cannot widen the surface by accident (S-sec
 
 import json
 import os
+import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -39,29 +40,37 @@ class AuditLogError(AppError):
 
 
 #: Patterns that must not appear anywhere in an audit payload (S-sec-3).
+#:
+#: Each is *credential-shaped* — the keyword immediately followed by ``=``, ``:`` or a
+#: quote — rather than the bare word. This app exists to maintain catalog tables, and
+#: those are routinely called ``dbo.UserPasswordPolicy``, ``dbo.SecretFlags`` or
+#: ``PasswordHistory``. A bare-word match refused those records, and since the caller
+#: reports a warning and moves on, the database write was committed with its compliance
+#: record silently and permanently lost — a worse outcome than the one the check exists
+#: to prevent. A keyword glued to a value is what a leaked connection string looks like.
 _CREDENTIAL_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("password", "password"),
-    ("pwd=", "pwd="),
-    ("secret", "secret"),
-    ("uid=", "uid="),
-    ("user id=", "user id="),
-    ("integrated security", "integrated security"),
+    (r"password\s*[=:]", "password="),
+    (r"pwd\s*[=:]", "pwd="),
+    (r"secret[\w]*\s*[=:]", "secret="),
+    (r"\buid\s*[=:]", "uid="),
+    (r"user\s+id\s*[=:]", "user id="),
+    (r"integrated\s+security\s*[=:]", "integrated security="),
 )
 
 
 def assert_no_credentials(payload: str) -> None:
     """Raise when ``payload`` looks like it carries credentials.
 
-    The check is deliberately blunt and case-insensitive: a false positive costs a
-    failed audit write with an explicit reason, while a false negative would put a
-    password in a file other users can read. The failure is loud, never silent.
+    The check is case-insensitive and deliberately blunt, but it is *shaped*: it fires
+    on a credential keyword bound to a value, not on the word appearing anywhere. See
+    :data:`_CREDENTIAL_PATTERNS` for why the bare word was too blunt here.
 
     Raises:
         AuditLogError: naming the pattern that matched.
     """
     lowered = payload.lower()
     for pattern, label in _CREDENTIAL_PATTERNS:
-        if pattern in lowered:
+        if re.search(pattern, lowered):
             raise AuditLogError(
                 f"refusing to write an audit record containing {label!r}: the audit log "
                 "must never carry credentials"
@@ -198,7 +207,16 @@ class AuditLog:
         line = payload.to_json()  # the credential check happens here
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a+", encoding="utf-8") as handle:
+            # Create the file 0600 rather than chmod-ing it afterwards. ``open("a")``
+            # creates with 0666 & ~umask (typically 0644, world-readable), so the
+            # statements sat in a readable file for the duration of every write — and
+            # on a shared host that is the window another user needs. storage/paths.py
+            # already does it this way for the config files.
+            existed = self.path.exists()
+            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(descriptor, "r+", encoding="utf-8") as handle:
+                if not existed:
+                    os.fchmod(descriptor, 0o600)  # a pre-existing file keeps its mode
                 # A crash can leave the file without a trailing newline. Appending
                 # straight onto that partial line would splice two records into one
                 # unreadable line and lose the *new* record too, so the line is closed
@@ -210,7 +228,6 @@ class AuditLog:
                     if handle.read(1) != "\n":
                         handle.write("\n")
                 handle.write(line + "\n")
-            os.chmod(self.path, 0o600)  # user-only (S-sec-7)
         except OSError as exc:
             raise AuditLogError(f"cannot write the audit log {self.path}: {exc}") from exc
 

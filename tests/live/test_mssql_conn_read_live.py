@@ -255,6 +255,63 @@ async def test_keyset_paging_walks_every_row_exactly_once(live_connection: Any) 
         )
 
 
+async def test_keyset_paging_over_a_composite_key_runs_on_a_real_server(
+    live_connection: Any,
+) -> None:
+    """``dbo.RegionAlias`` is keyed by ``(RegionId, Lang)``, so keyset paging applies.
+
+    The dialect rendered the multi-column predicate as a row-value comparison,
+    ``([RegionId], [Lang]) > (@p0, @p1)``. That is PostgreSQL/MySQL syntax — T-SQL has no
+    row-value constructor comparison — so every page after the first failed with a syntax
+    error. Only the *single*-column case had ever been run against a server, which is why
+    a green live suite did not catch it.
+    """
+    provider = MssqlProvider()
+    table = await provider.get_table_metadata(live_connection, "dbo", "RegionAlias")
+    assert table.identity_columns == ("RegionId", "Lang")
+    sort = tuple(SortKey(name) for name in table.identity_columns)
+
+    first = await provider.fetch_rows(
+        live_connection, table, FetchSpec(limit=1, offset=0, sort=sort)
+    )
+    assert first.count == 1
+    after = tuple((name, first.rows[0][name]) for name in table.identity_columns)
+
+    second = await provider.fetch_rows(
+        live_connection,
+        table,
+        FetchSpec(limit=10, offset=0, sort=sort, after_key=after),
+    )
+    assert second.rows, "the page after a composite key must not be empty"
+    for row in second.rows:
+        key = tuple(row[name] for name in table.identity_columns)
+        assert key > tuple(value for _, value in after)
+
+
+async def test_composite_keyset_paging_walks_every_row_exactly_once(live_connection: Any) -> None:
+    """Valid SQL is not enough: the expanded predicate must be a *total* order."""
+    provider = MssqlProvider()
+    table = await provider.get_table_metadata(live_connection, "dbo", "RegionAlias")
+    sort = tuple(SortKey(name) for name in table.identity_columns)
+
+    everything = await provider.fetch_rows(
+        live_connection, table, FetchSpec(limit=1000, offset=0, sort=sort)
+    )
+    seen: list[tuple[object, ...]] = []
+    after: Any = None
+    for _ in range(50):
+        page = await provider.fetch_rows(
+            live_connection, table, FetchSpec(limit=1, offset=0, sort=sort, after_key=after)
+        )
+        if not page.rows:
+            break
+        last = page.rows[-1]
+        seen.append(tuple(last[name] for name in table.identity_columns))
+        after = tuple((name, last[name]) for name in table.identity_columns)
+    assert len(seen) == everything.count, seen
+    assert len(set(seen)) == len(seen), "a composite-key page was returned twice"
+
+
 async def test_query_against_a_missing_object_raises_metadata_error(live_connection: Any) -> None:
     from sql_table_swiss_knife.providers import QueryError
 

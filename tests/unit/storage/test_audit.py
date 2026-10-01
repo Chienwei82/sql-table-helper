@@ -4,7 +4,9 @@ The properties that matter here are narrow and absolute: an Apply leaves a recor
 identifying who wrote where and what SQL, and *no* record ever contains a credential.
 """
 
+import os
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -84,13 +86,77 @@ def test_accepted_outcomes_are_the_three_that_exist() -> None:
         "password=hunter2",
         "Driver={x};UID=sa;PWD=***",
         "Integrated Security=SSPI",
-        "my secret value",
+        "Secret=hunter2",
+        "secret : hunter2",
         "User ID=admin",
+        "UID = sa",
     ],
 )
 def test_credential_patterns_are_refused(payload: str) -> None:
     with pytest.raises(AuditLogError, match="must never carry credentials"):
         assert_no_credentials(payload)
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "dbo.UserPasswordPolicy",
+        "dbo.SecretFlags",
+        "dbo.PasswordHistory",
+        "dbo.Secret",
+    ],
+)
+def test_a_catalog_table_named_after_a_credential_is_still_audited(
+    table: str, tmp_path: Path
+) -> None:
+    """A false positive here costs an *unaudited database write*, not a failed write.
+
+    The caller reports a warning and continues, so refusing the record for an ordinary
+    catalog table committed the change with its compliance record permanently lost.
+    Maintaining such tables is this tool's main use case.
+    """
+    log = AuditLog(path=tmp_path / "audit.jsonl")
+    entry = make_entry(table=table, statements=(f"UPDATE {table} SET Days = 90;",))
+
+    log.record(entry)  # must not raise
+
+    assert [recorded.table for recorded in log.entries()] == [table]
+
+
+def test_the_credential_guard_still_catches_a_leaked_connection_string(tmp_path: Path) -> None:
+    """Narrowing the patterns must not have opened the door the guard exists to close."""
+    log = AuditLog(path=tmp_path / "audit.jsonl")
+    entry = make_entry(statements=("SELECT 1 -- DRIVER={x};UID=sa;PWD=hunter2",))
+
+    with pytest.raises(AuditLogError):
+        log.record(entry)
+
+    assert not (tmp_path / "audit.jsonl").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_the_log_is_never_world_readable_even_while_being_written(tmp_path: Path) -> None:
+    """``chmod`` after the write left a window; the mode is now set at creation.
+
+    ``open("a")`` creates with ``0666 & ~umask``, so between creating the file and the
+    ``chmod`` the rendered statements sat in a world-readable file. On a shared host that
+    window is all another user needs, and the statements carry the SQL of the write.
+    """
+    log = AuditLog(path=tmp_path / "audit.jsonl")
+    seen: list[int] = []
+    real_open = os.open
+
+    def watching_open(path: object, flags: int, mode: int = 0o777) -> int:
+        descriptor = real_open(path, flags, mode)  # type: ignore[arg-type]
+        seen.append(os.fstat(descriptor).st_mode & 0o777)
+        return descriptor
+
+    with mock.patch("sql_table_swiss_knife.storage.audit.os.open", watching_open):
+        log.record(make_entry())
+
+    assert seen, "the file was not created through os.open"
+    assert all(mode & 0o077 == 0 for mode in seen), oct(seen[0])
+    assert (tmp_path / "audit.jsonl").stat().st_mode & 0o777 == 0o600
 
 
 def test_a_statement_carrying_a_password_is_never_written(tmp_path: Path) -> None:

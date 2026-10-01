@@ -234,13 +234,32 @@ class SqlDialect(Protocol):
         orders: Sequence[tuple[str, bool]],
         limit: int,
         offset: int,
-        after_key: Sequence[tuple[str, str]] = (),
     ) -> str:
-        """Paged SELECT; ``after_key`` enables keyset paging when it is non-empty."""
+        """Paged SELECT. Keyset paging is a ``predicates`` entry, not a mode here.
+
+        The keyset predicate is composed by the caller (it owns the parameter budget)
+        and arrives as an ordinary predicate, with ``offset`` already zeroed.
+        """
         ...
 
-    def keyset_predicate_sql(self, key_columns: Sequence[str], placeholders: Sequence[str]) -> str:
-        """A lexicographic ``>`` comparison over the key columns, for keyset paging."""
+    def keyset_marker_order(self, key_columns: Sequence[str]) -> tuple[int, ...]:
+        """Which key column each parameter marker of the keyset predicate binds, in order.
+
+        The lexicographic expansion repeats earlier keys (``a > @p0 OR (a = @p0 AND
+        b > @p1)``), so a driver that binds positionally needs one value *per marker*,
+        not one per key. The composition layer asks this to allocate them in the order
+        the predicate will read them.
+        """
+        ...
+
+    def keyset_predicate_sql(self, keyset: Sequence[tuple[str, str]], key_count: int) -> str:
+        """A lexicographic ``>`` comparison over the key columns, for keyset paging.
+
+        ``keyset`` is one ``(column, marker)`` pair per *marker*, in the order
+        :meth:`keyset_marker_order` produced — so it is longer than ``key_count`` keys.
+        The count is passed explicitly because it cannot be recovered from ``keyset``,
+        whose columns repeat.
+        """
         ...
 
     def inspect_error(self, message: str) -> ErrorFacts:

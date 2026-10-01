@@ -43,6 +43,14 @@ Being explicit here is more useful than a reassuring summary.
 - **The audit log is append-only by convention.** It is a local file; anyone with write
   access to the config directory can edit or delete it. It is a record of what the tool
   did, not a tamper-evident compliance system.
+- **The audit log's credential guard is a heuristic, not a parser.** It refuses a record
+  whose text binds a credential-shaped keyword to a value (`PWD=…`, `password: …`), so a
+  leaked connection string is caught. It cannot know that a value is a secret, so a
+  password pushed through an unrelated column would be recorded. The real guarantee is
+  upstream: secrets are held by reference and never reach an Apply.
+- **CSV/TSV export is not sanitised for spreadsheet formulas.** A cell beginning with
+  `=`, `+`, `-` or `@` is written verbatim, and the export targets Excel. Do not open an
+  export of untrusted data in a spreadsheet application.
 - **The tool trusts the database's own answers.** CHECK and UNIQUE constraints are
   reported as "will be verified by the database"; the app does not evaluate them. An
   `INSTEAD OF` trigger is surfaced as a warning, not interpreted.
