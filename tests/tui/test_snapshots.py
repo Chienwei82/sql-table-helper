@@ -250,6 +250,20 @@ def test_profile_editor(snap_compare: SnapCompare, app_factory: AppFactory) -> N
     snap_compare(app_factory(), terminal_size=SIZE, run_before=run_before)
 
 
+def test_profile_editor_short_terminal(snap_compare: SnapCompare, app_factory: AppFactory) -> None:
+    """The same form in a terminal too short to hold it: the actions must survive.
+
+    A snapshot at a comfortable size cannot catch a Save button that fell off the
+    bottom of an 80x24 window, which is the terminal most of these users actually have.
+    """
+
+    async def run_before(pilot: Pilot[App[None]]) -> None:
+        await pilot.press("n")
+        await _settle(pilot)
+
+    snap_compare(app_factory(), terminal_size=(80, 24), run_before=run_before)
+
+
 def test_error_toast(
     snap_compare: SnapCompare, app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:

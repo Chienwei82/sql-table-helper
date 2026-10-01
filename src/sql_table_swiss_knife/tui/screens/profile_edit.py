@@ -10,9 +10,9 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, MaskedInput, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
 from ...domain.connection import AuthMode, ConnectionOptions, ConnectionProfile, Environment
 from ...services import ConnectionService
@@ -42,29 +42,55 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
     }
     #profile-box {
         width: 78;
-        height: auto;
-        max-height: 90%;
+        max-width: 96%;
+        /* A share of the screen rather than an auto height: an auto-height box ignores
+           max-height once its content is taller, which is what pushed Save off the
+           bottom of an 80x24 window. */
+        height: 94%;
         padding: 0 1;
         background: $surface;
         border: round $primary;
-        overflow-y: auto;
     }
     #profile-title {
         height: 1;
         margin-bottom: 1;
     }
+    /* The fields scroll; the actions never do. A form that scrolls its own Save button
+       out of view is unusable in a short terminal, and the user cannot tell it is there. */
+    #profile-body {
+        height: 1fr;
+        overflow-y: auto;
+    }
     #profile-grid {
-        grid-size: 3;
-        grid-columns: 18 1fr;
-        grid-gutter: 0 1;
+        grid-size: 2;
+        grid-columns: 21 1fr;
+        grid-gutter: 0 2;
         height: auto;
     }
     #profile-grid Label {
-        height: 3;
-        content-align: left middle;
+        height: 1;
+        text-align: left;
     }
-    #profile-grid Checkbox {
+    /* One row per field. Textual's default input height of 3 (a bordered box) meant
+       fourteen fields needed forty-two lines, so a 32-row terminal scrolled away two
+       thirds of the form to show six of it. */
+    #profile-grid Input {
+        height: 1;
+        border: none;
+        padding: 0 1;
+    }
+    /* A Select needs its default three rows: squashed to one it renders the border and
+       nothing else, so the field appeared blank. */
+    #profile-grid Select {
         height: 3;
+    }
+    /* The three booleans carry sentences, not words: inside a 21-cell column they were
+       cut to "Force read-only (production o…", so they get the full width of the modal. */
+    #profile-posture {
+        height: auto;
+    }
+    #profile-posture Checkbox {
+        height: 1;
         width: 1fr;
         content-align: left middle;
         border: none;
@@ -103,7 +129,11 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
         title = f"Edit profile — {profile.name}" if profile else "New connection profile"
         with Vertical(id="profile-box"):
             yield Static(title, id="profile-title")
-            yield from self._fields(profile)
+            with VerticalScroll(id="profile-body"):
+                yield from self._fields(profile)
+            # Outside the scroller on purpose: these three state the write posture, and a
+            # posture the user has to scroll to find is one they will not check.
+            yield from self._posture(profile)
             yield Static(id="profile-hint")
             with Horizontal(id="profile-actions"):
                 yield Button("Cancel", id="cancel")
@@ -145,9 +175,11 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
                 id="f-username",
             )
             yield Label("Password")
-            yield MaskedInput(
-                # A trailing literal anchors the mask; the dots hide the length.
-                template="\u2022" * 20 + "x",
+            yield Input(
+                # ``password=True`` rather than a masked template: a template needs a
+                # non-separator character, and that literal renders as visible text at
+                # the end of the field, where it reads as part of a stored password.
+                password=True,
                 value="",
                 placeholder="(empty keeps the stored password)",
                 id="f-password",
@@ -159,7 +191,21 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
                 allow_blank=False,
                 id="f-environment",
             )
-            yield Label("Read-only")
+            yield Label("ODBC driver")
+            yield Input(value=options.driver, id="f-driver")
+            yield Label("Connect timeout (s)")
+            yield Input(value=str(options.connect_timeout_s), id="f-timeout")
+
+    def _posture(self, profile: ConnectionProfile | None) -> ComposeResult:
+        """The three booleans, full width.
+
+        Their captions are sentences rather than field names — "Trust the server
+        certificate (self-signed)" is 45 cells — so in a 21-cell label column they were
+        cut to "Trust the server certificate …", which states the option and hides the
+        consequence.
+        """
+        options = profile.options if profile else ConnectionOptions()
+        with Vertical(id="profile-posture"):
             yield Checkbox(
                 "Force read-only (production opens read-only by default)",
                 value=(
@@ -169,18 +215,12 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
                 ),
                 id="f-read-only",
             )
-            yield Label("ODBC driver")
-            yield Input(value=options.driver, id="f-driver")
-            yield Label("Encrypt")
             yield Checkbox("Encrypt connection", value=options.encrypt, id="f-encrypt")
-            yield Label("Trust certificate")
             yield Checkbox(
                 "Trust the server certificate (self-signed)",
                 value=options.trust_server_certificate,
                 id="f-trust",
             )
-            yield Label("Connect timeout (s)")
-            yield Input(value=str(options.connect_timeout_s), id="f-timeout")
 
     def on_mount(self) -> None:
         self.query_one("#f-name", Input).focus()
@@ -222,7 +262,7 @@ class ProfileEditScreen(ModalScreen[ConnectionProfile | None]):
 
     def action_save(self) -> None:
         """Validate the form and dismiss with the resulting profile."""
-        password = self.query_one("#f-password", MaskedInput).value
+        password = self.query_one("#f-password", Input).value
         try:
             profile = self._build_profile()
         except ValueError as exc:
