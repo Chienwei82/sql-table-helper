@@ -13,7 +13,6 @@ from typing import Any, ClassVar
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.command import Provider
-from textual.system_commands import SystemCommandsProvider
 
 from ..infra.clipboard import ClipboardService, default_backends
 from ..services import (
@@ -87,9 +86,15 @@ class SwissKnifeApp(App[None]):
     }
     """
 
-    #: The built-in command palette (ctrl+p) plus our action provider.
+    #: The command palette (ctrl+p) is served by our single :class:`ActionProvider`.
+    #:
+    #: Textual's ``SystemCommandsProvider`` is intentionally absent. The palette runs one
+    #: task per provider and merges the hits into one queue, so with two providers the
+    #: arrival order — and hence the rendered order of equally-scored hits — depends on
+    #: task scheduling, which made the palette snapshot intermittently mismatch.
+    #: ``ActionProvider`` yields the system commands itself instead (see
+    #: ``commands._system_actions``), so one provider means one deterministic order.
     COMMANDS: ClassVar[set[type[Provider] | Callable[[], type[Provider]]]] = {
-        SystemCommandsProvider,
         ActionProvider,
     }
 

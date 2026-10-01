@@ -8,6 +8,7 @@ from textual.widgets import OptionList
 
 from sql_table_swiss_knife.storage import ProfileStore, Settings, SettingsStore
 from sql_table_swiss_knife.tui.app import SwissKnifeApp
+from sql_table_swiss_knife.tui.commands import ActionProvider
 from sql_table_swiss_knife.tui.screens import ConnectionsScreen, TableBrowserScreen
 from sql_table_swiss_knife.tui.theme import DEFAULT_THEME, SEMANTIC_ROLES, theme_names
 from tests.tui.conftest import AppFactory, active_screen
@@ -137,3 +138,63 @@ async def test_command_palette_offers_the_current_screen_actions(
         }
         assert "Open" in browser_actions  # the picker's own action
         assert "Search" in browser_actions
+
+
+async def test_only_one_command_provider_is_registered(app_factory: AppFactory) -> None:
+    """The palette must have a single producer, or its hit order is nondeterministic.
+
+    Textual runs one task per provider and merges the hits into one queue, then sorts by
+    score with a *stable* sort — so with two or more providers, equally-scored hits are
+    rendered in whatever order the tasks happened to finish. That made the palette
+    snapshot mismatch on roughly half of all runs. One provider means one order.
+    """
+    assert len(SwissKnifeApp.COMMANDS) == 1, (
+        f"expected a single command provider, got {SwissKnifeApp.COMMANDS}"
+    )
+    assert ActionProvider in SwissKnifeApp.COMMANDS
+
+
+async def test_the_palette_serves_the_system_commands_from_our_provider(
+    app_factory: AppFactory,
+) -> None:
+    """Dropping Textual's provider must not drop its commands from the palette.
+
+    ``SystemCommandsProvider`` is unregistered (see ``App.COMMANDS``), so our provider
+    re-yields them; this asserts they are still reachable by typing.
+    """
+    app = app_factory()
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        await pilot.press(*"screenshot")
+        await pilot.pause()
+        options = app.screen.query_one(OptionList)
+        texts = [str(option.prompt).lower() for option in options.options]
+        assert any("screenshot" in text for text in texts), texts
+
+
+async def test_the_palette_order_is_stable_across_runs(app_factory: AppFactory) -> None:
+    """Regression guard: the same query renders the same order every time.
+
+    This is the assertion the snapshot test could not make. A snapshot only records one
+    ordering, so a racy palette still "passes" whenever it happens to agree with the
+    stored SVG; comparing repeated searches inside one process catches the race directly.
+    """
+    orders: list[list[str]] = []
+    for _ in range(3):
+        app = app_factory()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            await pilot.press(*"te")
+            for _ in range(4):
+                await pilot.pause()
+            options = app.screen.query_one(OptionList)
+            orders.append([str(option.prompt) for option in options.options])
+
+    assert orders[0], "the palette rendered nothing"
+    assert orders[1:] == orders[:-1], (
+        f"the palette order changed between identical searches:\n{orders}"
+    )
