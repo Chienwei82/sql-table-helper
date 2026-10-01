@@ -154,16 +154,13 @@ def _digits(value: Decimal) -> tuple[int, int]:
 
 
 def _length_limit(column: Column) -> int | None:
-    """Maximum number of *characters* for a character column, or ``None``.
+    """Maximum number of *characters* for a sized column, or ``None``.
 
-    ``max_length`` is a byte count from ``sys.columns``; ``nvarchar``/``nchar`` declare
-    their length in characters, so it is halved (same rule as the type formatter).
+    ``Column.max_length`` is already normalized to characters by the metadata mapper
+    (``sys.columns`` reports bytes for ``nvarchar``/``nchar`` and the mapper halves them
+    once), so it must **not** be halved again here — doing so halves the real limit twice
+    and rejects perfectly valid edits.
     """
-    if column.max_length is None:
-        return None
-    kind = _type_name(column)
-    if kind in {"nvarchar", "nchar"}:
-        return max(1, column.max_length // 2)
     return column.max_length
 
 

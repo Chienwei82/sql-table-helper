@@ -19,6 +19,25 @@ CRUD UI (catalog/lookup tables). Edits are staged in memory, the exact SQL is sh
 Apply runs everything in one transaction. The app's central promise is that a non-SQL
 author can maintain a catalog table, and a DBA can still read exactly what will run.
 
+## Two rules about believing your own tests
+
+Both defect classes fixed on this branch were caught by the *same* mistake, so they are
+written down here rather than left in a commit message.
+
+1. **A test that bypasses the layer where a bug lives cannot find it.** The unit tests
+   built `Column` objects by hand with `max_length` in **bytes**, so they agreed with the
+   `nvarchar` double-halving and stayed green while every Unicode column in the app was
+   capped at half its real width. Where a value crosses a unit boundary (bytes ↔
+   characters, cents ↔ units, local ↔ UTC), test the boundary, not the type.
+2. **A snapshot that records a bug is worse than no snapshot.** Six TUI SVGs had
+   `nvarchar(100)` baked in for a `nvarchar(200)` column. They agreed with each other and
+   with the buggy code, so agreement proved nothing. When you regenerate a snapshot, diff
+   the *rendered text*, not the SVG bytes — a wider label reflows the whole file and a
+   539-line diff hid a one-token change.
+
+Corollary, both hit here: **a fixture that only passes on a fresh container is not a
+fixture.** The live suite passed once and then poisoned its own next run. Run it twice.
+
 ## Non-negotiable rules
 
 1. **`uv` only.** Never `pip install` into `.venv`; there is no `requirements.txt`. Use

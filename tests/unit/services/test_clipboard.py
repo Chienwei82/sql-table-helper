@@ -554,7 +554,7 @@ def test_a_value_too_long_for_the_column_is_reported() -> None:
     grid = target()
     plan = plan_paste(grid, parse_block("Code\tName\nDE\t" + "x" * 201, known_columns=NAMES))
     assert not plan.ok
-    assert "100 characters" in plan.errors[0]
+    assert "200 characters" in plan.errors[0]
 
 
 def test_a_null_into_a_not_null_column_is_refused() -> None:

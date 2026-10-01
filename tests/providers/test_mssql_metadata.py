@@ -9,8 +9,10 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import ReferentialAction, TableKind
+from sql_table_swiss_knife.domain import ReferentialAction, Table, TableKind
 from sql_table_swiss_knife.providers.mssql import metadata as md
+from sql_table_swiss_knife.services.inspector import format_data_type
+from sql_table_swiss_knife.services.validation import _length_limit, validate_input
 
 # -- helpers ------------------------------------------------------------------
 
@@ -62,6 +64,33 @@ def test_nvarchar_length_is_halved_from_bytes() -> None:
     )
     assert column.max_length == 100
     assert column.collation == "SQL_Latin1_General_CP1_CI_AS"
+
+
+def test_nvarchar_width_survives_the_whole_pipeline() -> None:
+    """sys reports bytes; the declared character width must come out the far end.
+
+    Regression: the mapper halves ``max_length`` once (bytes → characters), and the
+    type formatter halved it a *second* time, so a declared ``nvarchar(100)`` was
+    advertised as ``nvarchar(50)`` and the editor refused the last 50 characters.
+    This exercises the real seam — raw sys row → mapper → formatter and edit limit.
+    """
+    raw_bytes = 800  # what sys.columns reports for nvarchar(400)
+    column = md.column_from_row(
+        _column(column_name="Detail", data_type="nvarchar", max_length=raw_bytes)
+    )
+
+    assert column.max_length == 400
+    assert format_data_type(column) == "nvarchar(400)"
+    assert _length_limit(column) == 400
+
+    owning = Table(
+        columns=(column,),
+        schema="dbo",
+        name="T",
+        kind=TableKind.BASE_TABLE,
+    )
+    assert validate_input(owning, column, "x" * 400).ok is True
+    assert validate_input(owning, column, "x" * 401).ok is False
 
 
 def test_max_length() -> None:

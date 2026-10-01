@@ -14,11 +14,46 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import ReferentialAction, TableKind
+from sql_table_swiss_knife.domain import (
+    ChangeKind,
+    FetchSpec,
+    FilterOp,
+    PendingChange,
+    ReferentialAction,
+    RowFilter,
+    TableKind,
+)
 from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
 from tests.live.test_mssql_writes_live import table_of
 
 pytestmark = pytest.mark.live
+
+
+async def test_a_unicode_column_reports_its_declared_character_width(
+    live_connection: Any,
+) -> None:
+    """``sys`` counts nvarchar widths in bytes; the app must report characters.
+
+    ``dbo.Typed.TextShort`` is declared ``nvarchar(50)`` and ``sys.columns.max_length``
+    reports 100. The metadata mapper halves that once; anything that halves it again
+    advertises nvarchar(25) and rejects the last 25 characters on edit. Asserted against
+    the real server so the byte-to-character step cannot drift unnoticed.
+    """
+    from sql_table_swiss_knife.services.inspector import format_data_type
+    from sql_table_swiss_knife.services.validation import _length_limit
+
+    typed = await table_of(live_connection, "dbo", "Typed")
+    column = typed.column("TextShort")
+
+    assert column.max_length == 50
+    assert format_data_type(column) == "nvarchar(50)"
+    assert _length_limit(column) == 50
+
+    raw = await live_connection.afetch(
+        "SELECT max_length FROM sys.columns "
+        "WHERE object_id = OBJECT_ID(N'dbo.Typed') AND name = N'TextShort'"
+    )
+    assert raw[0]["max_length"] == 100  # the bytes the halving above is correcting for
 
 
 async def test_exact_types_for_every_awkward_column(live_connection: Any) -> None:
@@ -211,3 +246,53 @@ async def test_a_procedure_is_not_reported_as_a_table(live_connection: Any) -> N
 
     with pytest.raises((MetadataError, Exception)):
         await MssqlProvider().get_table_metadata(live_connection, "dbo", "sp_renamed")
+
+
+async def test_a_table_whose_columns_are_named_like_placeholders_is_usable(
+    live_connection: Any, clean_slate: None
+) -> None:
+    """``dbo.PlaceholderNames`` has columns called ``@p0`` and ``@p10``.
+
+    The dialect names its own parameters ``@pN``, and the driver-bound rewrite turns those
+    into ODBC's ``?``. A plain text substitution also hit the *column names*, so every
+    statement came out as ``SELECT [?], [?] ... ORDER BY [?]`` and the server rejected the
+    whole table with "Invalid column name '?'" (Msg 207) — unreadable, and unwritable for
+    the same reason. Reads, writes and the generated SQL all have to survive the name.
+    """
+    provider = MssqlProvider()
+    table = await provider.get_table_metadata(live_connection, "dbo", "PlaceholderNames")
+    assert [c.name for c in table.columns] == ["@p0", "@p10", "Note"]
+
+    page = await provider.fetch_rows(live_connection, table, FetchSpec(limit=10))
+    assert [dict(row.values) for row in page.rows] == [
+        {"@p0": 1, "@p10": "@p0", "Note": "contains @p1 marker"}
+    ]
+
+    # An UPDATE addressing the placeholder-named PK column and a data column.
+    change = PendingChange(
+        kind=ChangeKind.UPDATE,
+        table=table.ref,
+        key=(("@p0", 1),),
+        before={"@p0": 1, "@p10": "@p0"},
+        after={"@p0": 1, "@p10": "@p1", "Note": "updated"},
+    )
+    result = await provider.execute_changes(live_connection, table, [change])
+    assert result.committed, result.error
+    assert [
+        dict(row.values)
+        for row in (await provider.fetch_rows(live_connection, table, FetchSpec(limit=10))).rows
+    ] == [{"@p0": 1, "@p10": "@p1", "Note": "updated"}]
+
+    # The stored value keeps the literal text: a '@p1' filter must match, not '@p?'.
+    matching = await provider.fetch_rows(
+        live_connection,
+        table,
+        FetchSpec(limit=10, filters=(RowFilter(column="@p10", operator=FilterOp.EQ, value="@p1"),)),
+    )
+    assert len(matching.rows) == 1
+    non_matching = await provider.fetch_rows(
+        live_connection,
+        table,
+        FetchSpec(limit=10, filters=(RowFilter(column="@p10", operator=FilterOp.EQ, value="?"),)),
+    )
+    assert non_matching.rows == ()

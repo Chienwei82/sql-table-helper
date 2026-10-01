@@ -140,6 +140,21 @@ BEGIN
 END;
 GO
 
+-- A column may legally be *named* like one of the dialect's own placeholders. The
+-- driver-bound rewrite of @pN -> ? must not touch a bracketed identifier, or the
+-- statement turns into "Invalid column name '?'" (Msg 207) and the table is unreadable.
+IF OBJECT_ID(N'dbo.PlaceholderNames', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.PlaceholderNames
+    (
+        [@p0]   int IDENTITY(1,1) NOT NULL,
+        [@p10]  nvarchar(50)       NULL,
+        [Note]  nvarchar(50)       NULL,
+        CONSTRAINT [PK PlaceholderNames] PRIMARY KEY ([@p0])
+    );
+END;
+GO
+
 IF OBJECT_ID(N'catálogos.Moneda', N'U') IS NULL
 BEGIN
     CREATE TABLE [catálogos].[Moneda]
@@ -249,6 +264,12 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.OrderLine)
     INSERT INTO dbo.OrderLine (Qty, Price) VALUES (2, 10.50), (3, 1.25);
+GO
+
+-- The value must *look* like a placeholder too: a filter binds it as a parameter, but a
+-- generated literal script would inline it, and neither path may rewrite the text.
+IF NOT EXISTS (SELECT 1 FROM dbo.PlaceholderNames)
+    INSERT INTO dbo.PlaceholderNames ([@p10], [Note]) VALUES (N'@p0', N'contains @p1 marker');
 GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.Account)

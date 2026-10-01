@@ -220,14 +220,16 @@ def column_badges(table: Table, column: Column) -> tuple[ColumnBadge, ...]:
 def format_data_type(column: Column) -> str:
     """The *exact* declared type, e.g. ``nvarchar(50)`` or ``decimal(10,2)``.
 
-    ``sys.columns.max_length`` counts bytes, so character types declaring a length in
-    characters (``nvarchar``/``nchar``) are halved; ``decimal``/``numeric`` render
-    ``(precision,scale)`` and ``float`` its precision in bits.
+    ``Column.max_length`` is already a *character* count: the metadata mapper halves the
+    byte count that ``sys.columns`` reports for ``nvarchar``/``nchar``. Rendering must
+    therefore use it as-is; halving again would advertise half the real declared width.
+    ``decimal``/``numeric`` render ``(precision,scale)`` and ``float`` its precision in
+    bits.
     """
     kind = column.data_type
-    if kind in {"nvarchar", "nchar"} and column.max_length is not None:
-        return f"{kind}({max(1, column.max_length // 2)})"
-    if kind in {"char", "varchar", "binary", "varbinary"} and column.max_length is not None:
+    if kind in {"nvarchar", "nchar", "char", "varchar", "binary", "varbinary"} and (
+        column.max_length is not None
+    ):
         return f"{kind}({column.max_length})"
     if kind in {"decimal", "numeric"} and column.precision is not None:
         return f"{kind}({column.precision},{column.scale or 0})"

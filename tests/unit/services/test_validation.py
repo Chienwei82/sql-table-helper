@@ -154,7 +154,9 @@ def test_null_in_a_nullable_column_is_allowed_and_announced() -> None:
 
 
 def test_max_length_counter_is_shown_while_typing() -> None:
-    subject = column("nvarchar", max_length=200, nullable=True)  # 100 characters
+    # Column.max_length is already a character count (the metadata mapper halves the
+    # byte count sys.columns reports), so nvarchar(100) arrives as max_length=100.
+    subject = column("nvarchar", max_length=100, nullable=True)
     result = validate_input(table(subject), subject, "abc")
 
     assert result.ok is True
@@ -162,15 +164,34 @@ def test_max_length_counter_is_shown_while_typing() -> None:
 
 
 def test_a_value_longer_than_the_column_blocks_staging() -> None:
-    subject = column("nvarchar", max_length=40, nullable=True)  # 20 characters
+    subject = column("nvarchar", max_length=20, nullable=True)
     result = validate_input(table(subject), subject, "x" * 21)
 
     assert result.ok is False
     assert "at most 20 characters (now 21)" in result.message
 
 
-def test_byte_sized_char_types_are_not_halved() -> None:
-    """Only nvarchar/nchar declare their length in characters."""
+def test_unicode_length_is_not_halved_twice() -> None:
+    """A nvarchar(400) column accepts 400 characters, not 200.
+
+    Regression: ``sys.columns`` reports *bytes* for nvarchar and the metadata mapper
+    halves them once. A second halving in the length limit silently capped every
+    Unicode column at half its real width, rejecting valid edits.
+    """
+    subject = column("nvarchar", max_length=400, nullable=True)
+    result = validate_input(table(subject), subject, "x" * 400)
+
+    assert result.ok is True
+    assert "400/400 characters" in result.message
+
+    over = validate_input(table(subject), subject, "x" * 401)
+
+    assert over.ok is False
+    assert "at most 400 characters (now 401)" in over.message
+
+
+def test_byte_sized_char_types_keep_their_length() -> None:
+    """Only nvarchar/nchar needed the byte-to-character conversion upstream."""
     subject = column("varchar", max_length=20, nullable=True)
     result = validate_input(table(subject), subject, "x" * 21)
 
