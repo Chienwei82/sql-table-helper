@@ -680,6 +680,63 @@ async def test_execute_changes_does_not_emit_identity_insert_on_a_natural_key_ta
     assert emitted[-1] == "COMMIT TRANSACTION"
 
 
+async def test_identity_insert_is_turned_off_even_when_an_apply_rolls_back(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    """``IDENTITY_INSERT`` is a *session* setting: ROLLBACK does not undo it.
+
+    The concurrency-conflict path returns from inside the statement loop, which used to
+    jump over the ``OFF``. The connection then kept ``IDENTITY_INSERT`` ON, and SQL Server
+    allows it for one session at a time — so every other session's insert into that table
+    failed until the app disconnected. The module promises it is "always turned back off".
+    """
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    raw = fake_pyodbc.connections[0]
+    insert = PendingChange(
+        kind=ChangeKind.INSERT,
+        table=table.ref,
+        after={"RegionId": 99, "Name": "Hesse"},
+    )
+    raw.rowcounts = {"UPDATE [dbo].[Region]": 0}  # somebody else changed the row first
+    before = len(raw.statements())
+
+    result = await provider.execute_changes(
+        conn, table, [insert, _update_region()], ApplyOptions(identity_insert=True)
+    )
+
+    assert result.committed is False
+    emitted = raw.statements()[before:]
+    assert "SET IDENTITY_INSERT [dbo].[Region] ON" in emitted
+    assert emitted[-1] == "SET IDENTITY_INSERT [dbo].[Region] OFF", emitted
+
+
+async def test_identity_insert_is_turned_off_when_a_statement_raises(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    """The error path owes the same ``OFF``; the guarantee is not per-exit-path."""
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    table = await provider.get_table_metadata(conn, "dbo", "Region")
+    raw = fake_pyodbc.connections[0]
+    change = PendingChange(
+        kind=ChangeKind.INSERT,
+        table=table.ref,
+        after={"RegionId": 99, "Name": "Hesse"},
+    )
+    raw.fails = {"INSERT INTO [dbo].[Region]": ("23000", 8152, "Arithmetic overflow error.")}
+    before = len(raw.statements())
+
+    result = await provider.execute_changes(
+        conn, table, [change], ApplyOptions(identity_insert=True)
+    )
+
+    assert result.committed is False
+    emitted = raw.statements()[before:]
+    assert "SET IDENTITY_INSERT [dbo].[Region] OFF" in emitted
+
+
 class TestToPositional:
     """The dialect names placeholders ``@pN``; the driver only understands ``?``.
 

@@ -241,13 +241,34 @@ class ChangeService:
 
         Returns:
             True when the buffer was carried over, False when the refresh turned out to
-            describe a *different* table — in which case the staged changes belonged to
-            something else and are dropped rather than applied to the wrong rows.
+            describe a *different* table — or the same table whose row identity has since
+            changed — in which case the staged changes are dropped rather than applied to
+            the wrong rows.
         """
         if table.ref != self._table.ref:
             return False
+        if not self._keys_survive(table):
+            return False
         self._table = table
         return True
+
+    def _keys_survive(self, table: Table) -> bool:
+        """Whether every staged row key still names a column of ``table``.
+
+        The ref alone is not enough. A refresh can arrive after a schema change — the key
+        column renamed or dropped — and the buffer would then be carried onto metadata
+        that cannot describe it: the first Apply raised ``ValueError: dbo.T has no column
+        'Code'``, which aborts the whole Apply instead of saying the staged work no
+        longer fits. Dropping it here is the same decision already made for a different
+        table *name*.
+        """
+        # ``keys()`` rather than iterating the set directly: the set iterates
+        # ``StagedRow`` objects, and ruff's SIM118 reads any ``.keys()`` as a dict.
+        return all(
+            table.column_or_none(name) is not None
+            for key in self.changes.keys()  # noqa: SIM118
+            for name, _ in key
+        )
 
     @property
     def is_empty(self) -> bool:
@@ -357,11 +378,13 @@ class ChangeService:
         """Stage an already-parsed value (a picker choice, a pasted value).
 
         Skips the text parser — the value came from somewhere that already knows its
-        type — but applies the same read-only and identity rules.
+        type — but applies the same read-only rule as :meth:`edit_cell`, through
+        :meth:`_refuses`.
         """
         column = self._table.column_or_none(column_name)
-        if column is None or (column.is_identity and not self._identity_insert):
+        if self._refuses(column, column_name):
             return StagedEdit(ok=False, hints=self._readonly_hints(column_name))
+        assert column is not None  # _refuses is True for a missing column
         change = self.changes.stage_cell(key, column.name, value, dict(original))
         return StagedEdit(ok=True, change=change)
 
@@ -385,8 +408,9 @@ class ChangeService:
         if staged is None or not staged.is_new:
             return StagedEdit(ok=False, hints=self._readonly_hints(column_name))
         column = self._table.column_or_none(column_name)
-        if column is None or (column.is_identity and not self._identity_insert):
+        if self._refuses(column, column_name):
             return StagedEdit(ok=False, hints=self._readonly_hints(column_name))
+        assert column is not None  # _refuses is True for a missing column
         change = self.changes.stage_cell(key, column.name, value, {})
         return StagedEdit(ok=True, change=change)
 
@@ -521,6 +545,25 @@ class ChangeService:
     def _readonly_hints(self, column_name: str) -> tuple[Hint, ...]:
         """The hint shown when a cell may not be staged (S-3)."""
         return (Hint(HintLevel.ERROR, f"{column_name} is read-only and cannot be staged"),)
+
+    def _refuses(self, column: Column | None, column_name: str) -> bool:
+        """Whether S-3 forbids staging a value into ``column``.
+
+        The single statement of the read-only rule. It exists because the rule was
+        written out three times and one copy drifted: ``edit_cell`` reaches it through
+        ``validate_input`` (``is_server_managed``), while ``stage_value`` and
+        ``fill_new_row`` re-implemented it as ``is_identity`` alone — so a computed,
+        rowversion or temporal column could be staged, and the whole Apply then failed
+        in ``_guard_server_managed`` instead of the one cell being refused.
+
+        ``IDENTITY_INSERT`` is the one documented exception: an identity column becomes
+        writable when the user explicitly confirmed it.
+        """
+        if column is None:
+            return True
+        if column.is_identity:
+            return not self._identity_insert
+        return column.is_server_managed
 
     # -- preview ------------------------------------------------------------
 

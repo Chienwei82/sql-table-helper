@@ -523,36 +523,46 @@ class MssqlProvider:
                 await handle.afetch(
                     self._dialect.identity_insert_sql(table.schema, table.name, enabled=True)
                 )
-            for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
-                rowcount, returned = await handle.aexecute(
-                    to_positional(statement.sql_parametrized),
-                    tuple(bindable(value) for value in statement.param_values),
-                )
-                if is_concurrency_conflict(change, rowcount):
-                    conflicts.append(RowConflict(change, statement, CONFLICT_REASON))
-                    results.append(StatementResult(change, statement, 0, False, CONFLICT_REASON))
-                    return await self._rollback(
-                        handle,
-                        results,
-                        conflicts,
-                        index,
-                        started,
-                        f"{CONFLICT_REASON} ({_describe(change)}) — refresh the row and retry",
+            try:
+                for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
+                    rowcount, returned = await handle.aexecute(
+                        to_positional(statement.sql_parametrized),
+                        tuple(bindable(value) for value in statement.param_values),
                     )
-                if returned and statement.kind is ChangeKind.INSERT:
-                    inserted_keys.append(_inserted_key(table, returned[0]))
-                results.append(StatementResult(change, statement, rowcount, True, None))
-            if identity_on:
-                await handle.afetch(
-                    self._dialect.identity_insert_sql(table.schema, table.name, enabled=False)
-                )
+                    if is_concurrency_conflict(change, rowcount):
+                        conflicts.append(RowConflict(change, statement, CONFLICT_REASON))
+                        results.append(
+                            StatementResult(change, statement, 0, False, CONFLICT_REASON)
+                        )
+                        # Returning from here is safe only because the OFF lives in a
+                        # ``finally``: it is a *session* setting, so the ROLLBACK below
+                        # does not undo it, and leaving it ON blocks every other
+                        # session's inserts on the table for the life of the connection.
+                        return await self._rollback(
+                            handle,
+                            results,
+                            conflicts,
+                            index,
+                            started,
+                            (
+                                f"{CONFLICT_REASON} ({_describe(change)}) — refresh the row "
+                                "and retry"
+                            ),
+                        )
+                    if returned and statement.kind is ChangeKind.INSERT:
+                        inserted_keys.append(_inserted_key(table, returned[0]))
+                    results.append(StatementResult(change, statement, rowcount, True, None))
+            finally:
+                if identity_on:
+                    # Every exit path owes this, including the early return above: leaving
+                    # IDENTITY_INSERT on would be worse than any error it could mask.
+                    with suppress(Exception):
+                        await handle.afetch(
+                            self._dialect.identity_insert_sql(
+                                table.schema, table.name, enabled=False
+                            )
+                        )
         except Exception as exc:
-            if identity_on:
-                # Best effort: leaving IDENTITY_INSERT on would be worse than the error.
-                with suppress(Exception):
-                    await handle.afetch(
-                        self._dialect.identity_insert_sql(table.schema, table.name, enabled=False)
-                    )
             return await self._rollback(
                 handle, results, conflicts, len(results), started, _message(exc)
             )

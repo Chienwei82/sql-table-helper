@@ -108,6 +108,58 @@ def test_sanitize_masks_password_and_user() -> None:
     assert "SERVER=localhost,1433" in text
 
 
+#: Passwords whose characters make ODBC brace-quoting kick in. Each of these leaked a
+#: fragment of the secret into :func:`sanitize_connection_string`'s output, which is the
+#: one string allowed to reach a log or a user-facing message.
+AWKWARD_PASSWORDS = [
+    "hunter2;TAIL",
+    "semi;colon;and;more",
+    "brace}inside",
+    "brace{inside",
+    "};UID=spoofed;PWD=spoofed;{",
+    "}UID=spoofed",
+]
+
+
+@pytest.mark.parametrize("password", AWKWARD_PASSWORDS)
+def test_sanitize_never_leaks_any_part_of_an_awkward_password(password: str) -> None:
+    """A secret split across chunks used to survive masking as a bare flag chunk.
+
+    ``PWD={hunter2;TAIL}`` splits naively into ``PWD={hunter2`` (masked) and ``TAIL}``
+    — no ``=``, so it was passed through verbatim into the log.
+    """
+    sanitized = sanitize_connection_string(build_connection_string(_sql_profile(), password))
+    for fragment in password.split(";"):
+        assert len(fragment) < 3 or fragment not in sanitized, sanitized
+    assert "spoofed" not in sanitized
+
+
+@pytest.mark.parametrize("password", ["p}w", "a{b}c"])
+def test_braces_inside_a_value_are_doubled_for_the_odbc_parser(password: str) -> None:
+    """An unescaped ``}`` closes the value early, so the driver gets a truncated password."""
+    doubled = password.replace("}", "}}").replace("{", "{{")
+    assert f"PWD={{{doubled}}}" in build_connection_string(_sql_profile(), password)
+
+
+def test_a_value_containing_a_brace_round_trips_through_the_splitter() -> None:
+    """The splitter the sanitizer relies on must agree with the quoting that produced it.
+
+    Counting braces cannot check this — doubling makes a chunk's brace count odd by
+    design — so the check is behavioural: the masked output must not contain the value,
+    and the non-secret keywords must survive intact.
+    """
+    from sql_table_swiss_knife.providers.mssql.connection import _split_chunks
+
+    text = build_connection_string(_sql_profile(), "a;b}c")
+    chunks = _split_chunks(text)
+    assert "PWD={a;b}}c}" in chunks
+    assert "SERVER=localhost,1433" in chunks
+    assert "Encrypt=yes" in chunks
+    sanitized = sanitize_connection_string(text)
+    assert "PWD=***" in sanitized
+    assert "SERVER=localhost,1433" in sanitized
+
+
 def test_driver_message_redaction() -> None:
     message = "failed: PWD=hunter2;UID=sa;Trusted_Connection=yes"
     cleaned = sanitize_driver_message(message)

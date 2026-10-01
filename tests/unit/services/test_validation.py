@@ -199,6 +199,40 @@ def test_byte_sized_char_types_keep_their_length() -> None:
     assert "at most 20 characters" in result.message
 
 
+@pytest.mark.parametrize(
+    ("data_type", "accepted", "rejected"),
+    [
+        ("tinyint", "255", "256"),
+        ("smallint", "32767", "32768"),
+        ("int", "2147483647", "2147483648"),
+        ("int", "-2147483648", "-2147483649"),
+        ("bigint", "9223372036854775807", "9223372036854775808"),
+    ],
+)
+def test_integer_ranges_come_from_the_type_not_its_precision(
+    data_type: str, accepted: str, rejected: str
+) -> None:
+    """An ``int`` column's range is 32 bits regardless of ``precision``.
+
+    ``sys.columns.precision`` is *decimal digits* — SQL Server reports 10 for ``int``
+    and 19 for ``bigint`` — so reading it as a bit width capped ``int`` at
+    -512…511 and refused every realistic value. These are the exact boundary values,
+    because a range check is only as good as its edges.
+    """
+    for precision in (None, 10, 19):
+        subject = column(data_type, precision=precision, nullable=True)
+        assert parse_value(subject, accepted)[0] is not None, precision
+        with pytest.raises(ValueError, match="outside"):
+            parse_value(subject, rejected)
+
+
+def test_a_realistic_int_value_is_not_refused_by_a_precision_sized_range() -> None:
+    """The user-visible symptom: a plain five-digit id staged fine nowhere."""
+    subject = column("int", precision=10, nullable=True)
+
+    assert parse_value(subject, "5000")[0] == 5000
+
+
 def test_precision_and_scale_are_counted() -> None:
     subject = column("decimal", precision=10, scale=2, nullable=True)
     result = validate_input(table(subject), subject, "1234.56")

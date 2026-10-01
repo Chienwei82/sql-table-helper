@@ -357,7 +357,6 @@ class TSqlDialect:
         orders: Sequence[tuple[str, bool]],
         limit: int,
         offset: int,
-        after_key: Sequence[tuple[str, str]] = (),
     ) -> str:
         if not columns:
             raise ValueError("SELECT needs at least one column")
@@ -368,18 +367,8 @@ class TSqlDialect:
         column_sql = ", ".join(self.quote_ident(column) for column in columns)
         qualified = self.quote_qualified(schema, table)
         sql = f"SELECT {column_sql} FROM {qualified}"
-        all_predicates = list(predicates)
-        if after_key:
-            # Keyset paging: continue *after* the last row of the previous page. Faster
-            # and stable against concurrent inserts, unlike OFFSET on a deep page.
-            all_predicates.append(
-                self.keyset_predicate_sql(
-                    [column for column, _ in after_key], [rendered for _, rendered in after_key]
-                )
-            )
-            offset = 0
-        if all_predicates:
-            sql += " WHERE " + " AND ".join(all_predicates)
+        if predicates:
+            sql += " WHERE " + " AND ".join(predicates)
         # T-SQL requires ORDER BY before OFFSET/FETCH.
         order_sql = ", ".join(
             f"{self.quote_ident(column)}{' DESC' if descending else ''}"
@@ -389,13 +378,53 @@ class TSqlDialect:
         sql += f" OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
         return sql
 
-    def keyset_predicate_sql(self, key_columns: Sequence[str], placeholders: Sequence[str]) -> str:
-        """Row-value comparison ``(a, b) > (@p0, @p1)`` for multi-column keys."""
-        if not key_columns or len(key_columns) != len(placeholders):
-            raise ValueError("keyset predicate needs matching key columns and placeholders")
-        left = "(" + ", ".join(self.quote_ident(column) for column in key_columns) + ")"
-        right = "(" + ", ".join(placeholders) + ")"
-        return f"{left} > {right}"
+    def keyset_marker_order(self, key_columns: Sequence[str]) -> tuple[int, ...]:
+        """Which key column each parameter marker of the keyset predicate binds, in order.
+
+        The lexicographic expansion repeats earlier keys (``a > @p0 OR (a = @p0 AND
+        b > @p1)``), so a driver binding positionally needs one value *per marker*, not
+        one per key: three markers for a two-column key. The composition layer asks this
+        to allocate them in the order the predicate will read them.
+        """
+        return tuple(key for index in range(len(key_columns)) for key in range(index + 1))
+
+    def keyset_predicate_sql(self, keyset: Sequence[tuple[str, str]], key_count: int) -> str:
+        """Rows strictly after ``keyset``, as T-SQL's lexicographic expansion.
+
+        ``keyset`` is one ``(column, marker)`` pair per *marker*, in the order
+        :meth:`keyset_marker_order` produced — so it is longer than ``key_count`` keys.
+        The key count is passed explicitly because it cannot be recovered from
+        ``keyset``, whose columns repeat.
+
+        T-SQL has **no** row-value constructor comparison, so ``(a, b) > (@p0, @p1)``
+        is a syntax error ("An expression of non-boolean type specified in a context
+        where a condition is expected", Msg 4145) — that form is PostgreSQL/MySQL
+        syntax. The portable expansion is
+        ``a > @p0 OR (a = @p0 AND b > @p1)``, which is what the ``SqlDialect``
+        protocol already described.
+        """
+        if not keyset or not 1 <= key_count <= len(keyset):
+            raise ValueError("keyset predicate needs matching key columns and markers")
+        rendered: list[str] = []
+        consumed = 0
+        for key_index in range(key_count):
+            # Term ``key_index`` compares keys ``0..key_index``, so it consumes exactly
+            # ``key_index + 1`` markers — the next slice of ``keyset`` in marker order.
+            clause = [
+                *(self._key_equality(keyset[consumed + earlier]) for earlier in range(key_index)),
+                self._key_inequality(keyset[consumed + key_index]),
+            ]
+            consumed += key_index + 1
+            rendered.append(" AND ".join(clause))
+        return "(" + " OR ".join(rendered) + ")"
+
+    def _key_equality(self, keyset: tuple[str, str]) -> str:
+        column, marker = keyset
+        return f"{self.quote_ident(column)} = {marker}"
+
+    def _key_inequality(self, keyset: tuple[str, str]) -> str:
+        column, marker = keyset
+        return f"{self.quote_ident(column)} > {marker}"
 
     def begin_transaction(self) -> str:
         return "BEGIN TRANSACTION"

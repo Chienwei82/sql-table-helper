@@ -38,6 +38,27 @@ def dialect() -> TSqlDialect:
     return TSqlDialect()
 
 
+@pytest.fixture
+def composite_table() -> Table:
+    """A table whose row identity is two columns, as ``dbo.RegionAlias`` is live.
+
+    Keyset paging only engages for an ascending sort over *exactly* the identity
+    columns, so the single-key fixtures could never reach the multi-column path.
+    """
+    from sql_table_swiss_knife.domain import Column, PrimaryKey, TableKind
+
+    return Table(
+        schema="dbo",
+        name="RegionAlias",
+        kind=TableKind.BASE_TABLE,
+        columns=(
+            Column("A", 1, "int", None, 10, 0, False, None, False, is_primary_key=True),
+            Column("B", 2, "char", 2, None, None, False, None, False, is_primary_key=True),
+        ),
+        primary_key=PrimaryKey("PK_RegionAlias", ("A", "B")),
+    )
+
+
 def test_build_insert_parametrized_and_literal(dialect: TSqlDialect, country_table: Table) -> None:
     statement = build_insert(dialect, country_table, {"Name": "O'Brien", "Population": 5})
     assert statement.kind is ChangeKind.INSERT
@@ -443,9 +464,59 @@ def test_keyset_paging_asks_for_rows_after_the_given_key(
         country_table,
         FetchSpec(limit=10, sort=(SortKey("Code"),), after_key=(("Code", "DE"),)),
     )
-    assert "WHERE ([Code]) > (@p0)" in select.sql
+    assert "WHERE ([Code] > @p0)" in select.sql
     assert "OFFSET 0 ROWS" in select.sql
     assert select.params[0].value == "DE"
+
+
+def test_keyset_paging_expands_a_composite_key_into_t_sql(
+    dialect: TSqlDialect, composite_table: Table
+) -> None:
+    """``(a, b) > (@p0, @p1)`` is a syntax error in T-SQL — it is PostgreSQL syntax.
+
+    SQL Server answered it with "An expression of non-boolean type specified in a
+    context where a condition is expected" (Msg 4145), so every page after the first
+    failed on a composite-key table. The single-key case happened to be valid
+    (``(x) > (@p0)`` is only parenthesization), which is why it went unnoticed.
+    """
+    select = build_select(
+        dialect,
+        composite_table,
+        FetchSpec(
+            limit=10,
+            sort=(SortKey("A"), SortKey("B")),
+            after_key=(("A", 1), ("B", 2)),
+        ),
+    )
+    assert "([A], [B]) >" not in select.sql
+    assert "[A] > @p0 OR [A] = @p1 AND [B] > @p2" in select.sql
+    # Three markers, so three bound values — the earlier key is repeated as a value,
+    # each with its own marker, because ODBC binds strictly positionally.
+    assert select.sql.count("@p") == 3
+    assert [param.value for param in select.params] == [1, 1, 2]
+    assert [param.column for param in select.params] == ["A", "A", "B"]
+
+
+def test_keyset_marker_order_matches_the_rendered_predicate(
+    dialect: TSqlDialect, composite_table: Table
+) -> None:
+    """The SQL and the bound values must not be able to disagree about the marker count.
+
+    This is the invariant that made the real driver reject the statement with "The SQL
+    contains 3 parameter markers, but 2 parameters were supplied".
+    """
+    from sql_table_swiss_knife.providers.mssql.provider import to_positional
+
+    select = build_select(
+        dialect,
+        composite_table,
+        FetchSpec(
+            limit=10,
+            sort=(SortKey("A"), SortKey("B")),
+            after_key=(("A", 1), ("B", 2)),
+        ),
+    )
+    assert to_positional(select.sql).count("?") == len(select.param_values)
 
 
 def test_keyset_paging_is_skipped_for_a_user_chosen_sort(
@@ -474,7 +545,7 @@ def test_filters_and_the_keyset_cursor_share_placeholder_order(
             after_key=(("Code", "DE"),),
         ),
     )
-    assert select.sql.index("[Name] LIKE @p0") < select.sql.index("([Code]) > (@p1)")
+    assert select.sql.index("[Name] LIKE @p0") < select.sql.index("[Code] > @p1")
     assert [param.name for param in select.params] == ["@p0", "@p1"]
 
 
@@ -492,6 +563,24 @@ def test_merge_refuses_a_batch_where_a_row_is_missing_the_key(
     with pytest.raises(ValueError, match="every key column"):
         build_merge(dialect, country_table, [{"Code": "DE", "Name": "Germany"}, {"Name": "Rome"}])
     assert "NULL" not in build_merge(dialect, country_table, [{"Code": "DE", "Name": "Germany"}])
+
+
+def test_merge_fills_a_column_another_row_lacks_with_null(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    """``build_table_insert`` already filled gaps with NULL; ``build_merge`` raised.
+
+    The column list is unioned across the rows, so a row that simply lacks a column
+    another row has is normal. A direct subscript raised a bare ``KeyError``, which
+    escaped the "refuse with a reason" contract and crashed the SQL action.
+    """
+    sql = build_merge(
+        dialect,
+        country_table,
+        [{"Code": "DE", "Name": "Germany"}, {"Code": "FR", "Population": 3}],
+    )
+    assert "(N'DE', N'Germany', NULL)" in sql
+    assert "(N'FR', NULL, 3)" in sql
 
 
 def test_table_insert_drops_rows_with_nothing_writable(

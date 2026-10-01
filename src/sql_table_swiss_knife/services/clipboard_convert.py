@@ -143,8 +143,8 @@ class ClipboardBlock:
 
 #: Windows Excel writes a BOM; it is not part of the first column's name.
 _BOM = "﻿"
-#: Normalize CRLF/CR line endings and drop NUL bytes, which no cell can hold.
-_LINE_SPLIT = re.compile(r"\r\n?|\x00")
+#: Normalize CRLF/CR line endings to ``\n``.
+_CRLF_SPLIT = re.compile(r"\r\n?")
 _THOUSANDS_EN = re.compile(r"(?<=\d),(?=\d{3}\b)")
 _THOUSANDS_DE = re.compile(r"(?<=\d)\.(?=\d{3}\b)")
 
@@ -161,11 +161,13 @@ def parse_block(
     a leading ``[``/``{`` makes it JSON, a comma or quote makes it CSV, and anything else
     is one value pasted into one cell (FR-4.4).
 
-    A UTF-8 BOM and CRLF line endings are normalized away, and ragged rows are padded so a
-    block that lost its last columns mid-copy still maps cleanly — the missing cells become
-    empty strings, which the NULL rules then decide.
+    A UTF-8 BOM, CRLF line endings and stray NUL bytes are normalized away, and ragged
+    rows are padded so a block that lost its last columns mid-copy still maps cleanly —
+    the missing cells become empty strings, which the NULL rules then decide. A NUL is
+    *deleted*, not turned into a line break: substituting a newline for it split one cell
+    into two rows, which could flip the paste toward ROWS mode and insert a junk row.
     """
-    cleaned = _LINE_SPLIT.sub("\n", text).lstrip(_BOM)
+    cleaned = _CRLF_SPLIT.sub("\n", text).replace("\x00", "").lstrip(_BOM)
     if not cleaned.strip():
         return ClipboardBlock((), PasteBlockFormat.SINGLE)
     kind = detect_format(cleaned)
@@ -199,9 +201,17 @@ def detect_format(text: str) -> PasteBlockFormat:
 def _parse_delimited(
     text: str, delimiter: str, known_columns: Sequence[str]
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...] | None]:
-    """RFC 4180 parsing for both delimiters, plus header detection."""
+    """RFC 4180 parsing for both delimiters, plus header detection.
+
+    A trailing row that is entirely blank is dropped. Every spreadsheet export ends with
+    one, and keeping it imported an extra row of blanks that then got INSERTed. Only the
+    *trailing* run is dropped: an interior row of spaces is a legitimate value, so this
+    cannot be a blanket "blank means absent" rule.
+    """
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, quotechar='"')
     rows = [tuple(row) for row in reader if row]
+    while rows and not any(cell.strip() for cell in rows[-1]):
+        rows.pop()
     if not rows:
         return (), None
     header = rows[0] if _looks_like_header(rows[0], known_columns) else None

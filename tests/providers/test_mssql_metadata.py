@@ -103,6 +103,28 @@ def test_char_and_varbinary_keep_length() -> None:
     assert md.column_from_row(_column(data_type="varbinary", max_length=16)).max_length == 16
 
 
+@pytest.mark.parametrize("data_type", ["text", "ntext", "image"])
+def test_legacy_lob_types_have_no_character_limit(data_type: str) -> None:
+    """``sys.columns.max_length`` for these is the 16-byte *pointer*, not a length.
+
+    Treating it as one capped ``text`` at 16 characters and ``ntext`` — halved again as
+    Unicode — at 8, so validation refused to stage any realistic value into the column.
+    The mapper has to report "unbounded" instead.
+    """
+    column = md.column_from_row(_column(data_type=data_type, max_length=16))
+    assert column.max_length is None
+    owning = Table(columns=(column,), schema="dbo", name="T", kind=TableKind.BASE_TABLE)
+    assert validate_input(owning, column, "x" * 100_000).ok is True
+
+
+def test_a_lob_column_survives_the_whole_pipeline_as_unbounded() -> None:
+    """The rule is metadata's, so no downstream layer may reintroduce a cap."""
+    column = md.column_from_row(_column(data_type="text", max_length=16))
+    assert format_data_type(column) == "text"
+    owning = Table(columns=(column,), schema="dbo", name="T", kind=TableKind.BASE_TABLE)
+    assert not any(hint.is_error for hint in validate_input(owning, column, "a" * 5000).hints)
+
+
 def test_decimal_precision_and_scale() -> None:
     column = md.column_from_row(_column(data_type="decimal", max_length=9, precision=18, scale=2))
     assert (column.precision, column.scale) == (18, 2)

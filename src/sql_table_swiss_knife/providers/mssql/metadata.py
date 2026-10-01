@@ -135,9 +135,14 @@ TRIGGER_EVENTS: dict[int, str] = {1: "INSERT", 2: "UPDATE", 3: "DELETE"}
 _KIND_BY_OBJECT_TYPE = {"U": TableKind.BASE_TABLE, "V": TableKind.VIEW}
 
 #: Data types whose ``max_length`` is a real character/byte length.
-_LENGTH_TYPES = frozenset(
-    {"char", "nchar", "varchar", "nvarchar", "binary", "varbinary", "text", "ntext", "image"}
-)
+_LENGTH_TYPES = frozenset({"char", "nchar", "varchar", "nvarchar", "binary", "varbinary"})
+
+#: The deprecated LOB types. Their ``sys.columns.max_length`` is **not** a length: it is
+#: the 16-byte *pointer* stored in the row (or, with ``sp_tableoption 'text in row'``, the
+#: number of bytes kept in-row). Reading it as a character cap capped a ``text`` column at
+#: 16 characters and an ``ntext`` column — halved again as Unicode — at 8, so validation
+#: refused to stage almost any value into them. They are treated as unbounded.
+_LOB_TYPES = frozenset({"text", "ntext", "image"})
 
 #: Types whose (precision, scale) pair is meaningful.
 _PRECISION_TYPES = frozenset({"decimal", "numeric", "datetime2", "datetimeoffset", "time"})
@@ -307,14 +312,14 @@ def row_count(raw: object) -> int | None:
 
 
 def _max_length(data_type: str, raw: object) -> int | None:
-    """Return a character length for sized types, ``None`` for unsized/MAX ones."""
+    """Return a character length for sized types, ``None`` for unsized/MAX/LOB ones."""
     lowered = data_type.lower()
-    if lowered not in _LENGTH_TYPES:
+    if lowered in _LOB_TYPES or lowered not in _LENGTH_TYPES:
         return None
     length = _as_int(raw)
     if length is None or length == _MAX_LENGTH:
         return None
-    if lowered in {"nchar", "nvarchar", "ntext"}:
+    if lowered in {"nchar", "nvarchar"}:
         length = length // 2  # sys.columns reports bytes for Unicode types
     return length
 

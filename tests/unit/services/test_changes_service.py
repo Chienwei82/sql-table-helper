@@ -176,6 +176,46 @@ async def test_an_identity_column_needs_the_explicit_opt_in(tmp_path: Path) -> N
     assert "RegionId" not in (allowed.change.change.after or {})
 
 
+@pytest.mark.parametrize("column", ["NameUpper", "RowVer"])
+@pytest.mark.parametrize("path", ["stage_value", "fill_new_row"])
+async def test_stage_value_refuses_every_server_managed_column_not_just_identity(
+    tmp_path: Path, column: str, path: str
+) -> None:
+    """S-3 says server-managed; only ``is_identity`` was being checked.
+
+    These two entry points take a value that is already parsed (a picker choice, a
+    positional paste), so they re-implemented the read-only rule instead of routing
+    through ``validate_input`` — and got it narrower. A computed or rowversion column
+    staged fine and then failed the *whole* Apply in ``_guard_server_managed``, instead
+    of the one cell the user typed into being refused.
+    """
+    service, _ = await _service(tmp_path)
+    new_key = service.insert_row({"Code": "FR"})
+
+    if path == "stage_value":
+        edit = service.stage_value(COUNTRY_KEY, column, "whatever", GERMANY)
+    else:
+        edit = service.fill_new_row(new_key, column, "whatever")
+
+    assert edit.ok is False, f"{path} staged a value into the {column} column"
+    assert "read-only" in edit.message
+
+
+async def test_the_read_only_rule_is_one_predicate_for_every_entry_point(
+    tmp_path: Path,
+) -> None:
+    """``edit_cell``, ``stage_value`` and ``fill_new_row`` must not disagree."""
+    service, _ = await _service(tmp_path)
+    new_key = service.insert_row({"Code": "FR"})
+
+    for column in ("NameUpper", "RowVer"):
+        by_text = service.edit_cell(COUNTRY_KEY, column, "x", GERMANY)
+        by_value = service.stage_value(COUNTRY_KEY, column, "x", GERMANY)
+        by_new_row = service.fill_new_row(new_key, column, "x")
+        verdicts = {by_text.ok, by_value.ok, by_new_row.ok}
+        assert verdicts == {False}, (column, verdicts)
+
+
 async def test_identity_insert_mode_allows_an_explicit_identity_value(tmp_path: Path) -> None:
     service, _ = await _service(tmp_path, IDENTITY_TABLE, rows={"Region": []}, identity_insert=True)
     new_key = service.insert_row({"Name": "Hesse"})
@@ -570,6 +610,47 @@ async def test_rebinding_a_different_table_is_refused(tmp_path: Path) -> None:
     assert changes.rebind(other) is False
     # The caller rebuilds on a refusal, so the service must not pretend it moved.
     assert changes.table is COUNTRY
+
+
+async def test_rebinding_a_table_whose_key_column_is_gone_is_refused(tmp_path: Path) -> None:
+    """Same name, different identity: the ref check alone let this through.
+
+    A refresh can arrive after a schema change. Carrying the buffer onto metadata that
+    no longer has the key column made the *first Apply* raise ``ValueError: dbo.Country
+    has no column 'Code'``, aborting the whole Apply instead of saying the staged work
+    no longer fits. This is the same refusal as a different table name.
+    """
+    changes, _provider = await _service(tmp_path)
+    changes.edit_cell((("Code", "DE"),), "Name", "Germany (edited)", COUNTRY_ROW)
+
+    renamed = Table(
+        schema="dbo",
+        name="Country",
+        kind=TableKind.BASE_TABLE,
+        columns=(Column("Iso", 1, "char", 2, None, None, False, None, False, is_primary_key=True),),
+        primary_key=PrimaryKey("PK_Country", ("Iso",)),
+    )
+
+    assert changes.rebind(renamed) is False
+    assert changes.table is COUNTRY
+
+
+async def test_rebinding_keeps_the_work_when_only_a_non_key_column_changed(
+    tmp_path: Path,
+) -> None:
+    """The refusal must be about the row identity, not about any schema change."""
+    changes, _provider = await _service(tmp_path)
+    changes.edit_cell((("Code", "DE"),), "Name", "Germany (edited)", COUNTRY_ROW)
+    without_name = Table(
+        schema="dbo",
+        name="Country",
+        kind=TableKind.BASE_TABLE,
+        columns=tuple(c for c in COUNTRY_COLUMNS if c.name != "Name"),
+        primary_key=PrimaryKey("PK_Country", ("Code",)),
+    )
+
+    assert changes.rebind(without_name) is True
+    assert changes.is_empty is False
 
 
 def test_error_wording_is_the_dialects_not_the_services() -> None:
