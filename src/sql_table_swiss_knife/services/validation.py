@@ -146,11 +146,24 @@ def _int_limits(column: Column) -> tuple[int, int]:
 
 
 def _digits(value: Decimal) -> tuple[int, int]:
-    """``(total digits, fractional digits)`` of a decimal, sign excluded."""
-    exponent = value.as_tuple().exponent
-    fraction = -exponent if isinstance(exponent, int) and exponent < 0 else 0
-    total = len(value.as_tuple().digits) + max(0, fraction - len(value.as_tuple().digits))
-    return max(total, len(value.as_tuple().digits)), fraction
+    """``(total digits, fractional digits)`` of a decimal, sign excluded.
+
+    ``Decimal`` normalises ``1E+2`` to one digit with exponent ``+2``, but SQL Server's
+    ``decimal(p,s)`` counts the digits of the *value*: ``1E+2`` is 100, so it occupies three
+    digits. Ignoring a positive exponent therefore under-counts and lets a value through
+    that the server will reject on insert, so the exponent is folded into the total.
+    """
+    sign, digits, exponent = value.as_tuple()
+    del sign
+    coefficient = len(digits)
+    if not isinstance(exponent, int):
+        # NaN/Infinity carry a string exponent and have no digit count to speak of.
+        return 0, 0
+    if exponent >= 0:
+        # 1E+2 -> 1 digit plus 2 implied trailing zeros.
+        return coefficient + exponent, 0
+    fraction = -exponent
+    return max(coefficient, fraction), fraction
 
 
 def _length_limit(column: Column) -> int | None:
@@ -200,7 +213,28 @@ def parse_value(column: Column, text: str) -> tuple[object, tuple[Hint, ...]]:
             numeric = Decimal(stripped)
         except InvalidOperation:
             raise ValueError(f"{column.name} is {kind}: {text!r} is not a number") from None
-        return (float(numeric) if kind in _FLOAT_TYPES else numeric), ()
+        # Decimal accepts several spellings that SQL Server has no column type for: NaN,
+        # sNaN, Infinity and -Infinity, plus PEP 515 underscores ("1_000"). All of them
+        # parsed fine and reached the driver, which failed on the round trip; float has the
+        # same problem via its own parser. Rejecting here keeps the error next to the cell
+        # the user typed it into, instead of aborting the whole Apply.
+        if not numeric.is_finite():
+            raise ValueError(f"{column.name} is {kind}: {text!r} is not a finite number") from None
+        if "_" in stripped:
+            # PEP 515 lets Python's numeric parsers accept "1_000"; SQL Server does not, so
+            # the value would stage fine and then fail on Apply.
+            raise ValueError(f"{column.name} is {kind}: {text!r} is not a number") from None
+        if kind in _FLOAT_TYPES:
+            try:
+                as_float = float(stripped)
+            except ValueError:
+                raise ValueError(f"{column.name} is {kind}: {text!r} is not a number") from None
+            if as_float != as_float or as_float in (float("inf"), float("-inf")):
+                raise ValueError(
+                    f"{column.name} is {kind}: {text!r} is not a finite number"
+                ) from None
+            return as_float, ()
+        return numeric, ()
     if kind in _DATE_TYPES:
         try:
             return date.fromisoformat(stripped), ()

@@ -1,5 +1,7 @@
 """Tests for staged changes: PendingChange validation and changed_columns."""
 
+import time
+
 import pytest
 
 from sql_table_swiss_knife.domain import (
@@ -368,3 +370,103 @@ def test_an_undo_snapshot_is_copied_not_shared() -> None:
     # The redo returns the state the user actually had, with both edits, unmodified by
     # the in-place mutation above (which only touched the live list).
     assert restored.change.after["Population"] == 999
+
+
+# -- batching: one paste, one undo step (FR-4.6) -------------------------------
+
+
+def test_a_batch_is_one_undo_step_not_one_per_cell() -> None:
+    """A paste is a single user action, so ctrl+z must undo all of it at once.
+
+    Regression: every cell snapshotted the whole staged set, so a five-row paste left ten
+    undo entries and the user had to press ctrl+z ten times to get back where they started.
+    """
+    changes = _changeset()
+    originals = [("DE", "Germany"), ("FR", "France"), ("JP", "Japan")]
+
+    with changes.batch():
+        for code, _ in originals:
+            row = {"Code": code, "Name": "x", "Population": 1}
+            changes.stage_cell((("Code", code),), "Name", "neu", row)
+            changes.stage_cell((("Code", code),), "Population", 2, row)
+
+    assert len(changes) == 3
+    assert changes.undo() is True
+    assert changes.is_empty is True  # the whole paste went at once
+    assert changes.undo() is False  # and nothing is left to undo
+
+
+def test_a_batch_preserves_the_collapse_rules() -> None:
+    """Batching changes the undo granularity, never what ends up staged."""
+    changes = _changeset()
+
+    with changes.batch():
+        changes.stage_cell(KEY, "Name", "a", _germany())
+        changes.stage_cell(KEY, "Name", "b", _germany())
+        changes.stage_cell(KEY, "Name", _germany()["Name"], _germany())
+
+    assert changes.is_empty is True  # back to the original value, so nothing is staged
+
+
+def test_a_batch_that_changes_nothing_leaves_no_undo_step() -> None:
+    """ctrl+z must always undo something the user actually did."""
+    changes = _changeset()
+    changes.stage_cell(KEY, "Name", "neu", _germany())
+
+    with changes.batch():
+        changes.stage_cell(KEY, "Name", "neu", _germany())  # no-op
+
+    assert changes.undo() is True  # only the real edit
+    assert changes.is_empty is True
+    assert changes.undo() is False
+
+
+def test_a_batch_can_nest_without_closing_the_outer_one() -> None:
+    changes = _changeset()
+
+    with changes.batch():
+        changes.stage_cell(KEY, "Name", "a", _germany())
+        with changes.batch():
+            changes.stage_cell(KEY, "Population", 5, _germany())
+        # The inner block exiting must not seal the outer one, or the Name edit would be
+        # snapshotted on its own and undo would only ever peel off one cell.
+        changes.stage_cell(KEY, "Name", "b", _germany())
+
+    assert changes.undo() is True
+    assert changes.is_empty is True
+
+
+def test_a_batch_that_raises_still_records_one_undo_step() -> None:
+    """A failed batch must not leave the set mutated with nothing to undo it."""
+    changes = _changeset()
+
+    with pytest.raises(RuntimeError), changes.batch():
+        changes.stage_cell(KEY, "Name", "neu", _germany())
+        raise RuntimeError("boom")
+
+    assert changes.undo() is True
+    assert changes.is_empty is True
+
+
+def test_batching_keeps_a_large_paste_linear() -> None:
+    """Guard the cost model: per-cell snapshotting made staging quadratic.
+
+    Timed rather than asserted on structure, because the regression *is* the cost. The
+    budget is deliberately loose -- it is there to catch the return of an O(n²) factor,
+    which showed up as ~4x per doubling, not to police constant factors.
+    """
+    rows = 1200
+    changes = ChangeSet(TABLE)
+
+    start = time.perf_counter()
+    with changes.batch():
+        for index in range(rows):
+            key = (("Code", f"C{index}"),)
+            original = {"Code": f"C{index}", "Name": "old", "Population": 1}
+            for column_name in ("Name", "Population"):
+                changes.stage_cell(key, column_name, "new", original)
+    elapsed = time.perf_counter() - start
+
+    assert len(changes) == rows
+    # ~0.4s quadratic before the fix at this size; a linear run is a small fraction of a second.
+    assert elapsed < 3.0, f"staging {rows} rows took {elapsed:.2f}s"

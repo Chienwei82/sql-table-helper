@@ -298,3 +298,58 @@ def test_error_beats_every_other_hint_in_the_summary() -> None:
 
     assert result.ok is False
     assert result.message == result.errors[0].text
+
+
+# -- numbers SQL Server has no column type for ---------------------------------
+
+
+@pytest.mark.parametrize("text", ["NaN", "sNaN", "Infinity", "-Infinity", "1_000"])
+def test_non_finite_and_underscored_decimals_are_refused(text: str) -> None:
+    """Python's numeric parsers accept spellings SQL Server cannot store.
+
+    ``Decimal`` reads ``NaN``/``Infinity`` and PEP 515 underscores, so these staged fine
+    and only failed later at the driver, aborting the whole Apply instead of flagging the
+    one cell the user typed them into.
+    """
+    subject = column("decimal", precision=10, scale=2, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is False
+    assert "not a" in result.message
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf", "1_0"])
+def test_non_finite_floats_are_refused(text: str) -> None:
+    subject = column("float", precision=53, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is False
+    assert "not a" in result.message
+
+
+@pytest.mark.parametrize(("text", "value"), [("1.5", "1.5"), ("123", "123"), ("1e3", "1000")])
+def test_ordinary_exponent_notation_still_parses(text: str, value: str) -> None:
+    """Rejecting the unspellable must not take exponent notation down with it."""
+    subject = column("decimal", precision=10, scale=2, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is True
+    assert result.value == Decimal(value)
+
+
+def test_a_positive_exponent_counts_the_digits_the_value_occupies() -> None:
+    """``decimal(p,s)`` bounds the digits of the value, and 1E+2 is 100.
+
+    Regression: ``Decimal("1E+2")`` normalises to a single digit with exponent +2, and the
+    old count ignored positive exponents, so a decimal(2,0) column accepted 1E+2 and the
+    server rejected it on insert.
+    """
+    subject = column("decimal", precision=2, scale=0, nullable=True)
+    too_wide = validate_input(table(subject), subject, "1E+2")
+
+    assert too_wide.ok is False
+    assert "holds 2 digits" in too_wide.message
+
+    fitting = validate_input(table(subject), subject, "9E+1")  # 90, two digits
+
+    assert fitting.ok is True

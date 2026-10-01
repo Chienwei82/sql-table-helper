@@ -174,3 +174,25 @@ async def test_an_empty_plan_stages_nothing_and_says_so(tmp_path: Path) -> None:
     assert edit.ok
     assert service.is_empty
     assert not edit.hints  # nothing happened, so nothing is claimed
+
+
+async def test_one_paste_is_one_undo_step(tmp_path: Path) -> None:
+    """A paste is one user action, so ctrl+z must take all of it back at once.
+
+    Regression: ``stage_paste`` committed per cell, so a paste left one undo entry per
+    cell and the user pressed ctrl+z once per pasted cell. This drives the real entry
+    point, not ``ChangeSet.batch()`` directly, so unwiring the batch would fail here.
+    """
+    service = await _service(tmp_path)
+    rows = (dict(GERMANY), dict(FRANCE))
+    block = parse_block(
+        "Code\tName\tPopulation\nDE\tDeutschland\t1\nFR\tFrance\t2", known_columns=NAMES
+    )
+    plan = plan_paste(_target(rows), block, mode=PasteMode.ROWS)
+
+    assert service.stage_paste(plan, rows).ok
+    assert service.counts[ChangeKind.UPDATE] == 2
+
+    assert service.undo() is True
+    assert service.is_empty is True
+    assert service.undo() is False  # nothing left: the whole paste went at once
