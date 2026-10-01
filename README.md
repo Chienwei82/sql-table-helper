@@ -111,6 +111,10 @@ uv run sql-table-swiss-knife
 Requires Python 3.14. To connect you also need an **ODBC driver manager** and the
 **Microsoft ODBC Driver 18** (17 works too) — on Linux, `unixODBC` plus the driver.
 
+**Behind a corporate proxy?** `uv` does its own TLS, so a proxy that intercepts with a
+private CA fails `uv sync` in a way `pip` would not. See
+[docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md).
+
 A **single-file** build is also supported for locked-down machines and for dropping the
 app onto a server without touching its Python:
 

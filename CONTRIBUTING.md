@@ -24,6 +24,12 @@ in sync.
 Running against SQL Server also needs `unixODBC` and the Microsoft ODBC Driver 18. A
 dockerized sample server lives in `tests/live` (see the README).
 
+If your network intercepts TLS with a private CA, `uv sync` will fail in a way `pip`
+would not — it does not read `REQUESTS_CA_BUNDLE`. See
+[docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md); the short version is
+`SSL_CERT_FILE=/path/to/corp-ca.pem` or `UV_SYSTEM_CERTS=1`, set as environment
+variables rather than in `pyproject.toml`.
+
 ## The five gates
 
 Run all of them before you open a pull request:
