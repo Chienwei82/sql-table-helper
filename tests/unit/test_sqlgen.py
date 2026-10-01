@@ -19,10 +19,12 @@ from sql_table_swiss_knife.providers import (
     build_delete,
     build_insert,
     build_merge,
+    build_script,
     build_select,
     build_statements,
     build_table_insert,
     build_update,
+    needs_identity_insert,
     sort_for_apply,
 )
 from sql_table_swiss_knife.providers.mssql import TSqlDialect
@@ -506,3 +508,67 @@ def test_table_insert_drops_rows_with_nothing_writable(
     assert "(N'Bavaria')" in sql
     assert sql.count("VALUES") == 1
     assert "NULL" not in sql
+
+
+def test_needs_identity_insert_is_false_for_a_table_with_no_identity_column(
+    dialect: TSqlDialect, country_table: Table
+) -> None:
+    """Both the script and Apply must ask the same question, or one of them lies.
+
+    ``Country`` has a natural ``Code`` key and no IDENTITY column, so ``SET
+    IDENTITY_INSERT`` on it is a runtime error ("Table does not have the identity
+    property"). The script already suppressed it; ``execute_changes`` did not, so the
+    SQL panel showed a script that worked while Apply raised — breaking the promise
+    that the SQL on screen is the SQL that runs.
+    """
+    statements = build_statements(
+        dialect,
+        country_table,
+        [
+            PendingChange(
+                kind=ChangeKind.INSERT,
+                table=TABLE,
+                after={"Code": "DE", "Name": "Germany"},
+            )
+        ],
+        options=ApplyOptions(identity_insert=True),
+    )
+    assert any(s.kind is ChangeKind.INSERT for s in statements)
+    # The script already gets this right; the predicate below is what Apply must use.
+    assert "IDENTITY_INSERT" not in build_script(
+        dialect, country_table, statements, identity_insert=True
+    )
+    assert not needs_identity_insert(country_table, statements, identity_insert=True)
+
+
+def test_needs_identity_insert_is_true_for_a_real_identity_insert(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    statements = build_statements(
+        dialect,
+        region_table,
+        [
+            PendingChange(
+                kind=ChangeKind.INSERT, table=TABLE, after={"RegionId": 7, "Name": "Bavaria"}
+            )
+        ],
+        options=ApplyOptions(identity_insert=True),
+    )
+    assert needs_identity_insert(region_table, statements, identity_insert=True)
+
+
+def test_needs_identity_insert_is_false_when_not_opted_in(
+    dialect: TSqlDialect, region_table: Table
+) -> None:
+    """Without the explicit opt-in there is nothing to bracket, even on an identity table."""
+    statements = build_statements(
+        dialect,
+        region_table,
+        [
+            PendingChange(
+                kind=ChangeKind.INSERT, table=TABLE, after={"RegionId": 7, "Name": "Bavaria"}
+            )
+        ],
+        options=ApplyOptions(identity_insert=True),
+    )
+    assert not needs_identity_insert(region_table, statements, identity_insert=False)

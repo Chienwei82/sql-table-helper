@@ -607,3 +607,46 @@ async def test_execute_changes_refuses_a_table_without_a_row_identity(
 
     with pytest.raises(QueryError, match="no usable row identity"):
         await provider.execute_changes(conn, keyless, [])
+
+
+async def test_execute_changes_does_not_emit_identity_insert_on_a_natural_key_table(
+    fake_pyodbc: FakePyodbc, profile: ConnectionProfile
+) -> None:
+    """``SET IDENTITY_INSERT`` on a table with no IDENTITY column is a runtime error.
+
+    ``dbo.Country`` is keyed by a natural ``Code`` with no IDENTITY anywhere, so issuing
+    ``SET IDENTITY_INSERT`` for it fails with "Table does not have the identity property".
+    The SQL preview already suppressed the pair; ``execute_changes`` only checked "is
+    there an INSERT", so Apply raised an error for a script the app had shown as valid —
+    exactly the drift the SQL panel exists to prevent.
+    """
+    from sql_table_swiss_knife.domain import PrimaryKey
+
+    provider = MssqlProvider()
+    conn = await provider.connect(profile, "pw")
+    natural = Table(
+        schema="dbo",
+        name="Country",
+        kind=TableKind.BASE_TABLE,
+        columns=(
+            Column("Code", 1, "varchar", 10, None, None, False, None, False, is_primary_key=True),
+            Column("Name", 2, "varchar", 50, None, None, False, None, False),
+        ),
+        primary_key=PrimaryKey("PK_Country", ("Code",)),
+    )
+    change = PendingChange(
+        kind=ChangeKind.INSERT,
+        table=natural.ref,
+        after={"Code": "DE", "Name": "Germany"},
+    )
+    before = len(fake_pyodbc.connections[0].statements())
+
+    result = await provider.execute_changes(
+        conn, natural, [change], ApplyOptions(identity_insert=True)
+    )
+
+    assert result.committed is True
+    emitted = fake_pyodbc.connections[0].statements()[before:]
+    assert not any("IDENTITY_INSERT" in sql for sql in emitted), emitted
+    assert emitted[0] == "BEGIN TRANSACTION"
+    assert emitted[-1] == "COMMIT TRANSACTION"

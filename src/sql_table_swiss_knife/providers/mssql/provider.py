@@ -25,7 +25,7 @@ from ..base import (
 )
 from ..dialect import ApplyOptions, SqlDialect
 from ..errors import MetadataError, QueryError
-from ..sqlgen import build_select, build_statements, sort_for_apply
+from ..sqlgen import build_select, build_statements, needs_identity_insert, sort_for_apply
 from . import metadata as md
 from .connection import (
     SingleThreadRunner,
@@ -407,8 +407,8 @@ class MssqlProvider:
         results: list[StatementResult] = []
         conflicts: list[RowConflict] = []
         inserted_keys: list[RowKey] = []
-        identity_on = settings.identity_insert and any(
-            statement.kind is ChangeKind.INSERT for statement in statements
+        identity_on = needs_identity_insert(
+            table, statements, identity_insert=settings.identity_insert
         )
         await handle.afetch(self._dialect.begin_transaction())
         try:
