@@ -535,6 +535,10 @@ Stated plainly, because a list of them is more useful than a claim of completene
   mapping, and `tests/live/` exists for a real server, but the full Apply path has never
   been driven end to end against SQL Server in this environment. **Do that before you
   trust it with production data.**
+- **There is still no live test of Apply.** `tests/live/` covers reads, not writes: the
+  fake-driver tests never exercise real parameter binding, which is exactly how a
+  statement once shipped with more bound values than placeholders. That is the first thing
+  worth adding when a server becomes available.
 - **The single-file build is not CI-verified.** PyInstaller output is platform-specific
   and the test suite does not cover it. It also does not bundle unixODBC or the Microsoft
   ODBC driver — those must be installed on the target machine.

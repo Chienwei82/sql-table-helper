@@ -28,6 +28,19 @@ fixed: generated SQL ignored staged edits; a filled-in new row displayed `NULL`;
 drifted from the change buffer; and SQL Server error wording and `LIKE` escaping lived
 inside `services/` instead of on `SqlDialect`.
 
+**Then two more defects and a round of refactors** (branch `refactor/decompose-table-editor`).
+The eleventh bug came out of the review itself: `execute_changes` re-derived the
+`SET IDENTITY_INSERT` decision that `build_script` already made, without the "does this
+table even have an IDENTITY column" check — so for a natural-key lookup table the SQL
+panel showed a script that ran and Apply then raised "Table does not have the identity
+property". Both now call one `needs_identity_insert`. Refactors: the overlay repaints only
+the row a stage changed (60,000 → 60 cell writes per keystroke on a 1000x60 grid); the
+app's service bundle is built once instead of per property access; `clipboard.py` split
+into conversion and planning; and the editor screen's clipboard half moved into a mixin
+(1672 → 1345 lines). Also fixed: `profiles.toml`/`settings.toml` were saved through a
+*fixed* `.tmp` sibling, so two app instances corrupted each other's writes — reproduced
+before fixing, now `storage.atomic_write` with a per-writer scratch name.
+
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 | Project skeleton & quality gates | ✅ |
@@ -385,6 +398,18 @@ Every TUI test runs against `FakeProvider` with temporary profile/settings store
 in-memory secret store: no database, no keyring, no touching the developer's config.
 
 ## Known gaps / follow-ups
+
+- **`tests/live/` still has no `execute_changes` test.** This is the gap that let the NULL
+  parameter-count bug ship: a green 955-test suite, provider tests that bind against a fake
+  cursor, and no test that runs Apply against real parameter binding. The cheapest
+  insurance would be one live test covering a nullable column with
+  `compare_original_values=True`.
+- **`execute_changes` still talks to pyodbc directly.** The two *decisions* inside it are
+  now pure and tested (`needs_identity_insert`, `is_concurrency_conflict`), but the
+  transaction control flow is only reachable through a fake driver. An `ApplySession`
+  protocol (`execute`/`commit`/`rollback`) would make it testable without one.
+- **`table_editor.py` is still 1345 lines.** The clipboard half is now a mixin; the SQL
+  panel, Apply/audit and the view state are still candidates.
 
 - **The live suite has not been executed against a real server yet** — this machine has no
   Docker and no `libodbc.so.2`, so `import pyodbc` fails and the live tests skip. They are
