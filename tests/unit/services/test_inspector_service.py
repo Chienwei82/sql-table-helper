@@ -67,7 +67,7 @@ def test_focus_moves_the_column_detail() -> None:
     detail = inspector.detail()
     assert detail is not None
     assert detail.column.name == "Name"
-    assert dict(detail.rows)["type"] == "nvarchar(100)"
+    assert dict(detail.rows)["type"] == "nvarchar(200)"
 
 
 def test_focus_ignores_a_column_that_no_longer_exists() -> None:
@@ -105,8 +105,8 @@ def test_headers_carry_the_badges_and_types_of_every_column() -> None:
 
     assert inspector.headers() == (
         "Code 🔑✱  char(2)",
-        "Name ✱  nvarchar(100)",
-        "Upper ƒ∅ 🔒  nvarchar(100)",  # 🔒: computed is read-only
+        "Name ✱  nvarchar(200)",
+        "Upper ƒ∅ 🔒  nvarchar(200)",  # 🔒: computed is read-only
     )
 
 

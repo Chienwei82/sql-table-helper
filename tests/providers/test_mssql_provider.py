@@ -709,6 +709,42 @@ class TestToPositional:
     def test_statement_without_placeholders_is_unchanged(self) -> None:
         assert to_positional("SELECT 1") == "SELECT 1"
 
+    def test_a_column_named_like_a_placeholder_is_not_rewritten(self) -> None:
+        """A bracketed identifier is a *name*, never a parameter position.
+
+        SQL Server permits a column called ``@p0``, and the dialect renders it as
+        ``[@p0]``. Rewriting that text produced ``SELECT [?] FROM ...``, which the server
+        rejects with "Invalid column name '?'" (Msg 207) — so such a table was completely
+        unreadable, and unwritable for the same reason.
+        """
+        sql = "SELECT [@p0], [@p1] FROM [dbo].[Weird] ORDER BY [@p0] OFFSET 0 ROWS"
+        assert to_positional(sql) == sql
+
+    def test_a_placeholder_shaped_string_literal_is_not_rewritten(self) -> None:
+        """A quoted literal is a *value*: rewriting it would filter on a mangled string."""
+        assert to_positional("SELECT * FROM t WHERE a = '@p0' AND b = @p1") == (
+            "SELECT * FROM t WHERE a = '@p0' AND b = ?"
+        )
+
+    def test_doubled_delimiters_do_not_end_the_quoted_run(self) -> None:
+        """``]]`` escapes an inner ``]`` and ``''`` an inner quote — both must not close."""
+        assert to_positional("SELECT [a]]@p0] FROM t WHERE b = @p1") == (
+            "SELECT [a]]@p0] FROM t WHERE b = ?"
+        )
+        assert to_positional("SELECT * FROM t WHERE a = 'it''s @p0' AND b = @p1") == (
+            "SELECT * FROM t WHERE a = 'it''s @p0' AND b = ?"
+        )
+
+    def test_marker_count_still_matches_the_values_when_a_name_looks_like_one(self) -> None:
+        """One real placeholder, one column called ``@p0`` — exactly one ``?``."""
+        assert to_positional("SELECT [@p0] FROM t WHERE a = @p0").count("?") == 1
+
+    def test_unterminated_quote_is_left_for_the_server_to_reject(self) -> None:
+        """Never swallow the remainder of a malformed statement."""
+        assert to_positional("SELECT * FROM t WHERE a = 'oops @p0") == (
+            "SELECT * FROM t WHERE a = 'oops @p0"
+        )
+
 
 class TestBindable:
     """pyodbc sends ``time`` with a scale of 0, silently dropping the microseconds.

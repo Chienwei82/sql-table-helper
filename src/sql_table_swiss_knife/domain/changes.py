@@ -1,6 +1,7 @@
 """Staged-change domain models (pending inserts/updates/deletes) and the staging area."""
 
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -177,6 +178,8 @@ class ChangeSet:
     _undo: list[list[StagedRow]] = field(default_factory=list)
     _redo: list[list[StagedRow]] = field(default_factory=list)
     _new_rows: int = 0
+    #: Pre-batch snapshot while a :meth:`batch` block is open, or ``None``.
+    _batch_base: list[StagedRow] | None = None
 
     # -- queries ------------------------------------------------------------
 
@@ -383,6 +386,34 @@ class ChangeSet:
         self.rows = _clone_rows(self._redo.pop())
         return True
 
+    # -- batching ------------------------------------------------------------
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Group many mutations into one undoable step.
+
+        Snapshotting per cell is what makes a paste of *n* cells cost O(n²) — every cell
+        deep-copies a staged set that already holds *n* rows — and it also leaves the
+        paste as *n* undo steps, so undoing one paste takes *n* presses of ``ctrl+z``.
+        Inside this block the set is mutated freely and snapshotted once, on entry, and
+        that single snapshot becomes the one undo step on exit.
+
+        A batch that changes nothing leaves the history untouched, which keeps the
+        guarantee that ``ctrl+z`` always undoes a real user action.
+        """
+        if self._batch_base is not None:
+            # Already batching: an inner block must not close the outer one.
+            yield
+            return
+        self._batch_base = _clone_rows(self.rows)
+        try:
+            yield
+        finally:
+            base, self._batch_base = self._batch_base, None
+            if base is not None and _clone_rows(self.rows) != base:
+                self._undo.append(base)
+                self._redo.clear()
+
     # -- internals ----------------------------------------------------------
 
     def _commit(
@@ -396,9 +427,27 @@ class ChangeSet:
 
         A no-op mutation (replacing a row with an identical one, or removing an absent
         key) leaves the undo history alone, so ``ctrl+z`` always undoes a real user
-        action rather than an internal no-op.
+        action rather than an internal no-op. Inside :meth:`batch` no snapshot is taken
+        here; the enclosing block records one for the whole group instead.
         """
+        if self._batch_base is not None:
+            self._mutate(existing, replacement, discard_all=discard_all)
+            return
         snapshot = _clone_rows(self.rows)
+        self._mutate(existing, replacement, discard_all=discard_all)
+        if _clone_rows(self.rows) == snapshot:
+            return
+        self._undo.append(snapshot)
+        self._redo.clear()
+
+    def _mutate(
+        self,
+        existing: StagedRow | None,
+        replacement: StagedRow | None,
+        *,
+        discard_all: bool = False,
+    ) -> None:
+        """Apply the mutation to the staged list, with no undo bookkeeping."""
         if discard_all:
             self.rows = []
         elif existing is None:
@@ -411,10 +460,6 @@ class ChangeSet:
             return
         else:
             self.rows[self.rows.index(existing)] = replacement
-        if _clone_rows(self.rows) == snapshot:
-            return
-        self._undo.append(snapshot)
-        self._redo.clear()
 
 
 def _as_update(

@@ -69,14 +69,62 @@ def to_positional(sql: str) -> str:
     parameters were supplied".
 
     ``sqlgen`` allocates indices contiguously and in binding order, so replacing them
-    left to right keeps the values aligned with the markers. Longest index first avoids
-    a partial match turning ``@p1`` into ``@p10``'s prefix.
+    left to right keeps the values aligned with the markers.
+
+    Only *bare* placeholders are rewritten. SQL Server lets a column be called ``@p0``,
+    and :meth:`TSqlDialect.quote_ident` renders it as ``[@p0]`` — a plain text substitution
+    turned that into ``[?]`` and the statement failed with "Invalid column name '?'" (207).
+    The same holds for a ``'@p1'`` string literal, which is a *value* and must be passed
+    through untouched, or the user would be filtering on a mangled string. So the scan
+    tracks bracket-quoted identifiers (``]]`` escapes an inner ``]``) and single-quoted
+    literals (``''`` escapes an inner quote``) and substitutes only outside them.
     """
-    indices = sorted({int(index) for index in _PLACEHOLDER_RE.findall(sql)}, reverse=True)
-    if not indices:
+    if "@p" not in sql:
         return sql
-    replacements = dict.fromkeys(indices, "?")
-    return _PLACEHOLDER_RE.sub(lambda match: replacements[int(match.group(1))], sql)
+    out: list[str] = []
+    index = 0
+    length = len(sql)
+    while index < length:
+        char = sql[index]
+        if char == "[":
+            end = _quoted_end(sql, index, "]")
+            out.append(sql[index:end])
+            index = end
+        elif char == "'":
+            end = _quoted_end(sql, index, "'")
+            out.append(sql[index:end])
+            index = end
+        elif char == "@":
+            match = _PLACEHOLDER_RE.match(sql, index)
+            if match is not None:
+                out.append("?")
+                index = match.end()
+            else:
+                out.append(char)
+                index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def _quoted_end(sql: str, start: int, closer: str) -> int:
+    """Index just past the quoted run beginning at ``start`` (which is the opener).
+
+    T-SQL escapes the closing delimiter by doubling it, so a run ends at the first
+    delimiter that is *not* the start of a doubled pair.
+    """
+    index = start + 1
+    length = len(sql)
+    while index < length:
+        if sql[index] == closer:
+            if index + 1 < length and sql[index + 1] == closer:
+                index += 2
+                continue
+            return index + 1
+        index += 1
+    # Unterminated: let the server produce the syntax error rather than swallowing the tail.
+    return length
 
 
 def bindable(value: object) -> object:

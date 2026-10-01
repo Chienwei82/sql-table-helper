@@ -515,7 +515,9 @@ def test_nullable_and_required_use_distinct_glyphs() -> None:
 @pytest.mark.parametrize(
     ("column_args", "expected"),
     [
-        ({"data_type": "nvarchar", "max_length": 200}, "nvarchar(100)"),
+        # Column.max_length is a character count by the time it reaches the formatter:
+        # the metadata mapper already halved the byte count sys.columns reports.
+        ({"data_type": "nvarchar", "max_length": 100}, "nvarchar(100)"),
         ({"data_type": "varchar", "max_length": 50}, "varchar(50)"),
         ({"data_type": "char", "max_length": 2}, "char(2)"),
         ({"data_type": "decimal", "precision": 10, "scale": 2}, "decimal(10,2)"),
@@ -542,7 +544,7 @@ def test_header_label_carries_badges_read_only_marker_and_type() -> None:
         pk=PrimaryKey("PK_Id", ("Id",)),
     )
     assert "🔒" in header_label(subject, subject.column("Upper"))
-    assert header_label(subject, subject.column("Name")).endswith("nvarchar(50)")
+    assert header_label(subject, subject.column("Name")).endswith("nvarchar(100)")
     assert "🔑" in header_label(subject, subject.column("Id"))
 
 

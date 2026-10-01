@@ -176,7 +176,7 @@ async def test_the_detail_section_follows_the_focused_column(
 
         await pilot.press("right")  # -> Name
         await pilot.pause()
-        assert "type: nvarchar(100)" in _panel_text(app)
+        assert "type: nvarchar(200)" in _panel_text(app)
         assert "unique: UQ_Country_Name" in _panel_text(app)
         assert panel.collapsed is False
 

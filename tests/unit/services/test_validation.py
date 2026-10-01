@@ -154,7 +154,9 @@ def test_null_in_a_nullable_column_is_allowed_and_announced() -> None:
 
 
 def test_max_length_counter_is_shown_while_typing() -> None:
-    subject = column("nvarchar", max_length=200, nullable=True)  # 100 characters
+    # Column.max_length is already a character count (the metadata mapper halves the
+    # byte count sys.columns reports), so nvarchar(100) arrives as max_length=100.
+    subject = column("nvarchar", max_length=100, nullable=True)
     result = validate_input(table(subject), subject, "abc")
 
     assert result.ok is True
@@ -162,15 +164,34 @@ def test_max_length_counter_is_shown_while_typing() -> None:
 
 
 def test_a_value_longer_than_the_column_blocks_staging() -> None:
-    subject = column("nvarchar", max_length=40, nullable=True)  # 20 characters
+    subject = column("nvarchar", max_length=20, nullable=True)
     result = validate_input(table(subject), subject, "x" * 21)
 
     assert result.ok is False
     assert "at most 20 characters (now 21)" in result.message
 
 
-def test_byte_sized_char_types_are_not_halved() -> None:
-    """Only nvarchar/nchar declare their length in characters."""
+def test_unicode_length_is_not_halved_twice() -> None:
+    """A nvarchar(400) column accepts 400 characters, not 200.
+
+    Regression: ``sys.columns`` reports *bytes* for nvarchar and the metadata mapper
+    halves them once. A second halving in the length limit silently capped every
+    Unicode column at half its real width, rejecting valid edits.
+    """
+    subject = column("nvarchar", max_length=400, nullable=True)
+    result = validate_input(table(subject), subject, "x" * 400)
+
+    assert result.ok is True
+    assert "400/400 characters" in result.message
+
+    over = validate_input(table(subject), subject, "x" * 401)
+
+    assert over.ok is False
+    assert "at most 400 characters (now 401)" in over.message
+
+
+def test_byte_sized_char_types_keep_their_length() -> None:
+    """Only nvarchar/nchar needed the byte-to-character conversion upstream."""
     subject = column("varchar", max_length=20, nullable=True)
     result = validate_input(table(subject), subject, "x" * 21)
 
@@ -277,3 +298,58 @@ def test_error_beats_every_other_hint_in_the_summary() -> None:
 
     assert result.ok is False
     assert result.message == result.errors[0].text
+
+
+# -- numbers SQL Server has no column type for ---------------------------------
+
+
+@pytest.mark.parametrize("text", ["NaN", "sNaN", "Infinity", "-Infinity", "1_000"])
+def test_non_finite_and_underscored_decimals_are_refused(text: str) -> None:
+    """Python's numeric parsers accept spellings SQL Server cannot store.
+
+    ``Decimal`` reads ``NaN``/``Infinity`` and PEP 515 underscores, so these staged fine
+    and only failed later at the driver, aborting the whole Apply instead of flagging the
+    one cell the user typed them into.
+    """
+    subject = column("decimal", precision=10, scale=2, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is False
+    assert "not a" in result.message
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf", "1_0"])
+def test_non_finite_floats_are_refused(text: str) -> None:
+    subject = column("float", precision=53, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is False
+    assert "not a" in result.message
+
+
+@pytest.mark.parametrize(("text", "value"), [("1.5", "1.5"), ("123", "123"), ("1e3", "1000")])
+def test_ordinary_exponent_notation_still_parses(text: str, value: str) -> None:
+    """Rejecting the unspellable must not take exponent notation down with it."""
+    subject = column("decimal", precision=10, scale=2, nullable=True)
+    result = validate_input(table(subject), subject, text)
+
+    assert result.ok is True
+    assert result.value == Decimal(value)
+
+
+def test_a_positive_exponent_counts_the_digits_the_value_occupies() -> None:
+    """``decimal(p,s)`` bounds the digits of the value, and 1E+2 is 100.
+
+    Regression: ``Decimal("1E+2")`` normalises to a single digit with exponent +2, and the
+    old count ignored positive exponents, so a decimal(2,0) column accepted 1E+2 and the
+    server rejected it on insert.
+    """
+    subject = column("decimal", precision=2, scale=0, nullable=True)
+    too_wide = validate_input(table(subject), subject, "1E+2")
+
+    assert too_wide.ok is False
+    assert "holds 2 digits" in too_wide.message
+
+    fitting = validate_input(table(subject), subject, "9E+1")  # 90, two digits
+
+    assert fitting.ok is True

@@ -468,32 +468,36 @@ class ChangeService:
             first = plan.errors[0]
             return StagedEdit(ok=False, hints=(Hint(HintLevel.ERROR, first),))
         notes: list[Hint] = []
-        for row_plan in plan.rows:
-            if row_plan.outcome is RowOutcome.INSERT:
-                values = {cell.column: cell.value for cell in row_plan.values}
-                self.insert_row(values)
-                continue
-            if row_plan.key is None or row_plan.target_row is None:
-                # A FILL/CELL plan onto a row with no identity cannot be staged safely
-                # (S-4): there is no WHERE clause that could name the row.
-                name = row_plan.values[0].column if row_plan.values else "cell"
-                notes.append(
-                    Hint(
-                        HintLevel.WARNING,
-                        f"row {row_plan.index + 1} ({name}) has no usable key — skipped",
+        # One batch for the whole paste: the cells collapse into the same rows either way,
+        # but per-cell snapshotting made the cost quadratic in the paste size and left the
+        # paste as one undo step per cell.
+        with self.changes.batch():
+            for row_plan in plan.rows:
+                if row_plan.outcome is RowOutcome.INSERT:
+                    values = {cell.column: cell.value for cell in row_plan.values}
+                    self.insert_row(values)
+                    continue
+                if row_plan.key is None or row_plan.target_row is None:
+                    # A FILL/CELL plan onto a row with no identity cannot be staged safely
+                    # (S-4): there is no WHERE clause that could name the row.
+                    name = row_plan.values[0].column if row_plan.values else "cell"
+                    notes.append(
+                        Hint(
+                            HintLevel.WARNING,
+                            f"row {row_plan.index + 1} ({name}) has no usable key — skipped",
+                        )
                     )
-                )
-                continue
-            key = row_plan.key
-            index = row_plan.target_row
-            original = dict(rows[index]) if 0 <= index < len(rows) else {}
-            staged = self.changes.find(key)
-            is_new = staged is not None and staged.is_new
-            for cell in row_plan.values:
-                if is_new:
-                    self.fill_new_row(key, cell.column, cell.value)
-                else:
-                    self.stage_value(key, cell.column, cell.value, original)
+                    continue
+                key = row_plan.key
+                index = row_plan.target_row
+                original = dict(rows[index]) if 0 <= index < len(rows) else {}
+                staged = self.changes.find(key)
+                is_new = staged is not None and staged.is_new
+                for cell in row_plan.values:
+                    if is_new:
+                        self.fill_new_row(key, cell.column, cell.value)
+                    else:
+                        self.stage_value(key, cell.column, cell.value, original)
         updates, inserts = len(plan.updates), len(plan.inserts)
         if plan.rows:
             notes.append(

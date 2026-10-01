@@ -162,6 +162,9 @@ _RESET_STATEMENTS: tuple[str, ...] = (
     "DELETE FROM [Lookups].[Weird ]]Name]",
     "DELETE FROM [catálogos].[Moneda]",
     "DELETE FROM [dbo].[Keyless]",
+    # Written by the placeholder-named-columns test; without a reset here its UPDATE
+    # survives into the next run and the test fails on the leftover row.
+    "DELETE FROM [dbo].[PlaceholderNames]",
     "DBCC CHECKDB ('SwissKnifeSample') WITH NO_INFOMSGS, PHYSICAL_ONLY",
 )
 
@@ -204,6 +207,8 @@ _RESEED_STATEMENTS: tuple[str, ...] = (
     # [Col with space] is IDENTITY: the server assigns it.
     "INSERT INTO [Lookups].[Weird ]]Name] ([select], [Cola]]B]) VALUES (N'primero', 42)",
     "INSERT INTO [catálogos].[Moneda] ([Código], [Descripción]) VALUES (N'EUR', N'euro')",
+    # The column names are themselves placeholders; [@p0] is IDENTITY so it is left out.
+    "INSERT INTO [dbo].[PlaceholderNames] ([@p10], [Note]) VALUES (N'@p0', N'contains @p1 marker')",
 )
 
 
@@ -214,8 +219,21 @@ async def _reset(conn: Any) -> None:
     # Reseed the identities before inserting, not after: the counters then restart from
     # the (now empty) tables every run, so the seeded ids are the same whatever a previous
     # run left behind and tests can assert on them.
-    for table in ("[dbo].[Region]", "[dbo].[Store]", "[dbo].[Supplier]", "[dbo].[Item]"):
-        await conn.afetch(f"DBCC CHECKIDENT ('{table}', RESEED) WITH NO_INFOMSGS")
+    #
+    # The explicit RESEED, 0 is load-bearing. Plain DBCC CHECKIDENT (..., RESEED) leaves
+    # the counter where it was — verified against SQL Server 2022: after DELETE plus a bare
+    # RESEED, the next INSERT still got id 3085, while RESEED, 0 produced id 1. This went
+    # unnoticed because no test asserted on an identity value; the fixture data all
+    # resolved parents by name.
+    for table in (
+        "[dbo].[Region]",
+        "[dbo].[Store]",
+        "[dbo].[Supplier]",
+        "[dbo].[Item]",
+        # Its test asserts on the key value [@p0], so the identity has to restart too.
+        "[dbo].[PlaceholderNames]",
+    ):
+        await conn.afetch(f"DBCC CHECKIDENT ('{table}', RESEED, 0) WITH NO_INFOMSGS")
     for statement in _RESEED_STATEMENTS:
         await conn.afetch(statement)
 
