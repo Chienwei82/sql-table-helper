@@ -38,9 +38,18 @@ syntax) must be isolated behind a provider/dialect abstraction from day one (see
 - Any DDL (CREATE/ALTER/DROP), schema designer, index management.
 - Stored procedure / function editing or execution.
 - User/permission administration, backup/restore.
-- File-based bulk import (CSV/Excel *file* import may come later; clipboard paste is in scope).
+- File-based bulk import of **Excel `.xlsx`** (CSV/JSON file import *is* in scope — see the
+  amendment below; clipboard paste was always in scope).
 - PostgreSQL, MySQL, SQLite support (only the abstraction must be ready for them).
 - Multi-table joins, updatable JOIN views, ORM features.
+
+> **Amendment (M7, recorded 2026-10-01).** This section originally excluded *all*
+> file-based import. CSV/JSON file import was nevertheless built in M7, reusing the
+> clipboard pipeline — a file import is a paste with a chooser in front — and it still
+> cannot write to the database without confirmation. Rather than delete working, tested
+> code, the scope line is narrowed to what is genuinely still absent: Excel `.xlsx`.
+> `.xlsx` is not a delimited text format and would need a real parser, which is why it
+> stayed out.
 
 ## 3. Verified environment facts
 

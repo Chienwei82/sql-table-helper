@@ -260,6 +260,32 @@ AppFactory = Callable[..., SwissKnifeApp]
 
 
 @pytest.fixture
+def snap_compare(snap_compare: Callable[..., bool]) -> Callable[..., bool]:
+    """Wrap pytest-textual-snapshot's ``snap_compare`` so a mismatch fails the test.
+
+    The upstream fixture *returns* whether the screenshot matched; it does not raise.
+    Every call site here discards that return value, so a mismatched snapshot left the
+    run green ("1 passed") while only a line in the terminal summary and an HTML report
+    recorded the failure — a green suite that was not evidence of anything. This
+    override asserts the result, so a visual regression fails like any other test.
+
+    The snapshot diff itself is still written to ``snapshot_report.html``.
+    """
+    upstream = snap_compare
+
+    def compare(*args: object, **kwargs: object) -> bool:
+        matched = upstream(*args, **kwargs)
+        assert matched, (
+            "snapshot mismatch: the screen no longer matches its stored SVG. Review the "
+            "diff in snapshot_report.html; if the change is intended, re-run with "
+            "--snapshot-update."
+        )
+        return matched
+
+    return compare
+
+
+@pytest.fixture
 def app_factory(tmp_path: Path, provider: FakeProvider) -> AppFactory:
     """Build a fully injected app; returns a callable taking extra constructor kwargs.
 

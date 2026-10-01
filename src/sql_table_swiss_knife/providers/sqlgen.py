@@ -38,6 +38,15 @@ class SelectStatement:
     sql: str
     params: tuple[SqlParam, ...]
 
+    @property
+    def param_values(self) -> tuple[object, ...]:
+        """Parameter values in placeholder order (for driver execute).
+
+        The driver binds plain Python values; handing it the ``SqlParam`` wrappers makes
+        pyodbc reject the call with "Invalid parameter type ... param-type=SqlParam".
+        """
+        return tuple(param.value for param in self.params)
+
 
 def sort_for_apply(changes: Iterable[PendingChange]) -> list[PendingChange]:
     """Stable DELETE → UPDATE → INSERT ordering for FK-friendly execution (DESIGN §6)."""
@@ -55,6 +64,13 @@ def _guard_server_managed(
         raise ValueError(f"{context}: computed column {name!r} cannot be written")
     if column.is_rowversion:
         raise ValueError(f"{context}: rowversion column {name!r} cannot be written")
+    if column.generated_always_type != 0:
+        # Temporal period columns: the engine owns them, so an explicit value is refused
+        # here rather than bouncing off the server as an opaque error mid-transaction.
+        raise ValueError(
+            f"{context}: column {name!r} is server-managed "
+            f"(GENERATED ALWAYS={column.generated_always_type}) and cannot be written"
+        )
     if column.is_identity and not allow_identity:
         raise ValueError(f"{context}: identity column {name!r} cannot be written")
     return column

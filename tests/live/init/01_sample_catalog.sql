@@ -23,7 +23,9 @@ BEGIN
         CreatedUtc  datetime2(3)   NOT NULL CONSTRAINT DF_Country_CreatedUtc DEFAULT (SYSUTCDATETIME()),
         CONSTRAINT PK_Country PRIMARY KEY (Code),
         CONSTRAINT UQ_Country_Name UNIQUE (Name),
-        CONSTRAINT CK_Country_Code CHECK (Code = UPPER(Code)),
+        -- COLLATE ... CS is required: the database default collation is case-insensitive,
+        -- where "Code = UPPER(Code)" is true for *every* value and the CHECK never fires.
+        CONSTRAINT CK_Country_Code CHECK (Code COLLATE Latin1_General_100_BIN2 = UPPER(Code)),
         CONSTRAINT CK_Country_Population CHECK (Population >= 0)
     );
 END;

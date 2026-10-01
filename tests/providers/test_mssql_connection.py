@@ -1,15 +1,22 @@
 """Tests for the ODBC connection-string builder, sanitizing and error mapping."""
 
+import datetime
+import struct
+
 import pytest
 
 from sql_table_swiss_knife.domain import AuthMode, ConnectionOptions, ConnectionProfile
 from sql_table_swiss_knife.providers import AuthError, ConnectError, MetadataError, QueryError
 from sql_table_swiss_knife.providers.mssql.connection import (
+    _DATETIMEOFFSET_FORMAT,
     build_connection_string,
+    decode_datetimeoffset,
+    execute,
     fetch_all,
     sanitize_connection_string,
 )
 from sql_table_swiss_knife.providers.mssql.errors import map_pyodbc_error, sanitize_driver_message
+from sql_table_swiss_knife.providers.mssql.metadata import COLUMNS_SQL, column_from_row
 
 SECRET = "sup3r-s3cret"
 
@@ -113,6 +120,47 @@ class _FakePyodbcError(Exception):
     """Mimics the pyodbc.Error args shape: (sqlstate, vendor, message)."""
 
 
+class _RealShapePyodbcError(Exception):
+    """Mimics the args shape pyodbc actually raises: ``(sqlstate, message)``.
+
+    The vendor number only appears inside the message text, so the old parsing that read
+    ``args[1]`` as the vendor code never matched and login failures surfaced as
+    ``ProviderError: InterfaceError: 28000`` instead of ``AuthError``.
+    """
+
+
+def test_login_failure_maps_to_auth_error_with_the_real_args_shape() -> None:
+    error = _RealShapePyodbcError(
+        "28000",
+        "[28000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        "Login failed for user 'no_such_login_12345'. (18456) (SQLDriverConnect)",
+    )
+    mapped = map_pyodbc_error(error)
+    assert isinstance(mapped, AuthError)
+    assert "no_such_login_12345" not in str(mapped)
+    assert "18456" not in str(mapped)
+
+
+def test_unknown_database_maps_to_auth_error_with_the_real_args_shape() -> None:
+    error = _RealShapePyodbcError(
+        "42000",
+        "[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        'Cannot open database "NoSuchDatabase_98765" requested by the login. (4060)',
+    )
+    assert isinstance(map_pyodbc_error(error), AuthError)
+
+
+def test_missing_driver_library_maps_to_connect_error_with_the_real_args_shape() -> None:
+    error = _RealShapePyodbcError(
+        "01000",
+        "[01000] [unixODBC][Driver Manager]Can't open lib 'ODBC Driver 99 for SQL Server' : "
+        "file not found (0) (SQLDriverConnect)",
+    )
+    mapped = map_pyodbc_error(error)
+    assert isinstance(mapped, ConnectError)
+    assert "driver" in str(mapped).lower()
+
+
 def test_auth_error_mapping() -> None:
     error = _FakePyodbcError("28000", "18456", "Login failed for user 'sa'.")
     mapped = map_pyodbc_error(error)
@@ -161,14 +209,23 @@ def test_app_errors_pass_through() -> None:
 
 
 class _FakeCursor:
+    """Records how ``execute`` was called, distinguishing an omitted argument from ``None``.
+
+    pyodbc treats an explicit ``None`` as one NULL parameter, so the distinction is the
+    whole point of these tests; a fake with a default of ``None`` would hide the bug.
+    """
+
     def __init__(self, columns: list[str], rows: list[tuple[object, ...]]) -> None:
         self.description = [(name,) for name in columns]
         self._rows = rows
         self.closed = False
+        self.params_provided = False
+        self.params: object = None
 
-    def execute(self, sql: str, params: object = None) -> None:
+    def execute(self, sql: str, *args: object) -> None:
         self.sql = sql
-        self.params = params
+        self.params_provided = bool(args)
+        self.params = args[0] if args else None
 
     def fetchall(self) -> list[tuple[object, ...]]:
         return self._rows
@@ -177,8 +234,150 @@ class _FakeCursor:
         self.closed = True
 
 
+def test_columns_sql_selects_no_nonexistent_sys_columns_field() -> None:
+    """Regression: ``sys.columns`` has no ``is_rowversion`` column.
+
+    Selecting it made every metadata read fail against a real server with
+    "Invalid column name 'is_rowversion'" (SQLSTATE 42S22). The rowversion flag is
+    derived from the type name instead, which is what the server does expose.
+    """
+    assert "is_rowversion" not in COLUMNS_SQL
+    assert "sys.columns" in COLUMNS_SQL
+
+
+def test_rowversion_is_detected_from_the_type_name() -> None:
+    row = {
+        "column_name": "RowVer",
+        "column_id": 1,
+        "data_type": "timestamp",
+        "max_length": 8,
+        "is_nullable": 0,
+        "is_identity": 0,
+        "is_computed": 0,
+    }
+    assert column_from_row(row).is_rowversion is True
+    assert column_from_row({**row, "data_type": "int"}).is_rowversion is False
+
+
+def test_decode_datetimeoffset_accepts_a_buffer_like_value() -> None:
+    """A ``NameError`` here only showed up when a table actually had a datetimeoffset.
+
+    The cast helper was used but never imported, so the branch was dead until a live
+    read reached it.
+    """
+    raw = struct.pack(_DATETIMEOFFSET_FORMAT, 2024, 5, 17, 10, 30, 0, 0, 120)
+    assert decode_datetimeoffset(raw) == datetime.datetime(
+        2024, 5, 17, 10, 30, tzinfo=datetime.timezone(datetime.timedelta(minutes=120))
+    )
+
+
+def test_decode_datetimeoffset_passes_none_through() -> None:
+    assert decode_datetimeoffset(None) is None
+
+
+def test_columns_sql_casts_identity_seed_away_from_an_unreadable_odbc_type() -> None:
+    """Regression: raw ``sys.identity_columns`` values are unreadable through pyodbc.
+
+    They arrive as ODBC SQL type -16 and raise "ODBC SQL type -16 is not yet supported",
+    which broke the metadata read for every table. The cast makes them plain bigints.
+    """
+    assert "CAST(ic.seed_value AS bigint) AS seed_value" in COLUMNS_SQL
+    assert "CAST(ic.increment_value AS bigint) AS increment_value" in COLUMNS_SQL
+
+
+def test_temporal_period_columns_are_server_managed() -> None:
+    """``GENERATED ALWAYS`` period columns must not be offered as editable."""
+    row = {
+        "column_name": "ValidFrom",
+        "column_id": 2,
+        "data_type": "datetime2",
+        "is_nullable": 0,
+        "is_identity": 0,
+        "is_computed": 0,
+        "generated_always_type": 1,
+    }
+    column = column_from_row(row)
+    assert column.generated_always_type == 1
+    assert column.is_server_managed is True
+
+    assert column_from_row({**row, "generated_always_type": 0}).is_server_managed is False
+
+
+def test_identity_seed_and_increment_are_read_as_ints() -> None:
+    row = {
+        "column_name": "Id",
+        "column_id": 1,
+        "data_type": "int",
+        "max_length": 4,
+        "is_nullable": 0,
+        "is_identity": 1,
+        "is_computed": 0,
+        "seed_value": 1000,
+        "increment_value": 5,
+    }
+    column = column_from_row(row)
+    assert column.identity_seed == 1000
+    assert column.identity_increment == 5
+
+
 def test_fetch_all_returns_plain_dicts() -> None:
     cursor = _FakeCursor(["a", "b"], [(1, "x"), (2, None)])
     rows = fetch_all(cursor, "SELECT 1", ())
     assert rows == [{"a": 1, "b": "x"}, {"a": 2, "b": None}]
     assert isinstance(rows[0], dict)
+
+
+def test_execute_omits_the_argument_when_there_are_no_parameters() -> None:
+    """Regression: pyodbc 5.3 reads an explicit ``None`` as a single NULL parameter.
+
+    Passing ``None`` through made every parameterless statement fail against a real
+    server with "The SQL contains 0 parameter markers, but 1 parameters were supplied".
+    """
+    cursor = _FakeCursor([], [])
+    execute(cursor, "DELETE FROM t")
+    assert cursor.params_provided is False
+
+
+def test_execute_passes_an_empty_sequence_without_a_null_parameter() -> None:
+    cursor = _FakeCursor([], [])
+    execute(cursor, "DELETE FROM t", ())
+    assert cursor.params_provided is False
+
+
+def test_execute_forwards_real_parameters_as_a_tuple() -> None:
+    cursor = _FakeCursor([], [])
+    execute(cursor, "SELECT ?", [7, "x"])
+    assert cursor.params_provided is True
+    assert cursor.params == (7, "x")
+
+
+def test_fetch_all_with_no_params_does_not_supply_a_null() -> None:
+    cursor = _FakeCursor(["n"], [(1,)])
+    assert fetch_all(cursor, "SELECT 1") == [{"n": 1}]
+    assert cursor.params_provided is False
+
+
+class _FakeDmlCursor(_FakeCursor):
+    """A cursor for a statement with no result set, as pyodbc reports it.
+
+    ``fetchall`` on such a cursor raises; the fake reproduces that so a test cannot
+    silently pass by not reading rows.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([], [])
+        self.fetchall_called = False
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        self.fetchall_called = True
+        raise AssertionError("fetchall must not be called on a statement with no result set")
+
+
+def test_fetch_all_returns_empty_for_a_statement_with_no_result_set() -> None:
+    """Regression: DML run for its effect has an empty description, not rows.
+
+    Reading ``fetchall`` anyway raised "No results. Previous SQL was not a query."
+    """
+    cursor = _FakeDmlCursor()
+    assert fetch_all(cursor, "DELETE FROM t") == []
+    assert cursor.fetchall_called is False

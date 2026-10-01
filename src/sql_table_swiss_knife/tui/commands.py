@@ -32,6 +32,7 @@ class Action:
     category: str
     help: str
     callback: Callable[[], None]
+    discover: bool = True
 
     @property
     def display(self) -> str:
@@ -75,6 +76,8 @@ class ActionProvider(Provider):
     async def discover(self) -> Hits:
         """Show every action, in declaration order, before the user types."""
         for action in self._actions():
+            if not action.discover:
+                continue
             yield DiscoveryHit(
                 display=action.display,
                 text=action.display,
@@ -83,9 +86,17 @@ class ActionProvider(Provider):
             )
 
     def _actions(self) -> list[Action]:
-        """Screen actions first (most relevant), then the app-wide ones."""
+        """Screen actions first (most relevant), then the app-wide ones.
+
+        Textual's own :class:`SystemCommandsProvider` is deliberately *not* registered
+        (see ``App.COMMANDS``): the palette runs one task per provider and merges their
+        hits into a single queue, so with two providers the arrival order — and therefore
+        the rendered order of equally-scored hits — depends on task scheduling. Folding
+        the system commands in here keeps a single producer and a deterministic list.
+        """
         actions: list[Action] = list(_screen_actions(self.screen))
         actions.extend(_app_actions(cast("SwissKnifeApp", self.app)))
+        actions.extend(_system_actions(cast("SwissKnifeApp", self.app), self.screen))
         return actions
 
 
@@ -150,3 +161,23 @@ def _app_actions(app: SwissKnifeApp) -> list[Action]:
         ]
     )
     return actions
+
+
+def _system_actions(app: SwissKnifeApp, screen: Screen[object]) -> list[Action]:
+    """The app's built-in system commands, re-yielded as palette actions.
+
+    ``App.get_system_commands`` is the single source of truth for these (theme cycling,
+    quit, the keys panel, maximise, screenshot), so this adapter must not restate them:
+    it only translates them into :class:`Action` so our single provider can serve them.
+    Keeping the upstream ``discover`` flag preserves the empty-query behaviour.
+    """
+    return [
+        Action(
+            name=command.title,
+            category="system",
+            help=command.help,
+            callback=cast("Callable[[], None]", command.callback),
+            discover=command.discover,
+        )
+        for command in app.get_system_commands(screen)
+    ]

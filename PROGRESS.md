@@ -60,7 +60,8 @@ before fixing, now `storage.atomic_write` with a per-writer scratch name.
 | `ruff format --check .` | ✅ 143 files already formatted |
 | `mypy` (strict, `src` + `tests`) | ✅ no issues in 136 source files |
 | `lint-imports` (layering contract) | ✅ 1 kept, 0 broken |
-| `pytest` | ✅ **955 passed, 14 skipped** (the skips are the live suite) |
+| `pytest` | ✅ **1014 passed, 80 skipped** (the skips are the live suite) |
+| live suite (SQL Server 2022) | ✅ **81 passed** against a real container — `tests/live/run-live.sh` |
 | `uv build` | ✅ sdist + wheel; the wheel installs and both entry points run |
 | Coverage | **87%** (statements + branches) |
 
@@ -168,7 +169,10 @@ once the TUI inspector (M4) exists.
 | `tests/providers/test_mssql_connection.py` | connection string, sanitizing, error mapping |
 | `tests/providers/test_mssql_provider.py` | full provider path against a **fake pyodbc driver** |
 | `tests/unit/test_cli.py` | `inspect` argument parsing and Rich rendering |
-| `tests/live/test_mssql_live.py` | **live** integration tests against the docker server |
+| `tests/live/test_mssql_live.py` | **live** smoke: connect, list, metadata |
+| `tests/live/test_mssql_conn_read_live.py` | **live** connection errors, TLS, filters, paging |
+| `tests/live/test_mssql_metadata_edge_live.py` | **live** awkward names, types, temporal pairing |
+| `tests/live/test_mssql_writes_live.py` | **live** `execute_changes`: DML, rollback, conflicts, triggers |
 
 The live suite is marked `live` and is **skipped** unless
 `SWISSKNIFE_TEST_DB_URL` points at a reachable server:
@@ -179,11 +183,37 @@ export SWISSKNIFE_TEST_DB_URL="mssql://sa:SwissKnife%212022_Test@localhost:1433/
 uv run pytest -m live
 ```
 
-> **Gap worth closing first.** `tests/live/` covers metadata and reads but has **no
-> `execute_changes` test**, so the parameter-binding contract was never exercised against
-> a real driver — which is exactly how the NULL-guard bug above survived a 955-test green
-> suite. A live test that Applies an UPDATE on a table with a nullable column and
-> `compare_original_values=True` is the cheapest insurance available.
+`tests/live/run-live.sh` does the whole thing, including the ODBC client. The host needs
+neither `libodbc` nor the Microsoft driver: the runner image carries both, so the suite
+works on a machine where installing system packages is not an option.
+
+```bash
+./tests/live/run-live.sh          # 81 live tests against a real SQL Server 2022
+docker compose -f tests/live/docker-compose.yml down -v   # tear down
+```
+
+> **Closed.** The gap noted earlier — no `execute_changes` test — is now covered by
+> `tests/live/test_mssql_writes_live.py`. Building it found **four defects that a
+> 955-test green suite could not see**, all of them on the write path:
+>
+> 1. **Named placeholders were never translated for the driver.** The dialect emits `@p0`
+>    (the preview legend needs readable names) but ODBC only recognises `?`. Every write
+>    and every filtered read failed with *"The SQL contains 0 parameter markers, but N
+>    parameters were supplied"*. Fixed by `providers/mssql/provider.py:to_positional`,
+>    applied at the driver boundary so the preview keeps its labels.
+> 2. **`sys.columns.is_rowversion` does not exist.** Selected on every metadata read, so
+>    all of them failed with `42S22 Invalid column name`. The flag is now derived from the
+>    type name, which is where it actually lives.
+> 3. **`sys.identity_columns.seed_value` is unreadable through pyodbc.** It arrives as ODBC
+>    type -16 and raises *"ODBC SQL type -16 is not yet supported"*, breaking metadata for
+>    every table. Cast to `bigint` — faithful, since seed and step are integers.
+> 4. **`decode_datetimeoffset` raised `NameError`.** `cast` was used but never imported, so
+>    the branch was dead until a live read hit a `datetimeoffset` column.
+>
+> A fifth came from the fixture itself: `get_table_metadata` built the `OBJECT_ID`
+> argument with an f-string, so a table named `Weird ]Name` became `[Lookups].[Weird ]Name]`.
+> `OBJECT_ID` parses brackets, so it resolved to nothing and reported a table that exists
+> as missing. It now quotes through the dialect.
 
 ---
 

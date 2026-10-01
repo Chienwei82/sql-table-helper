@@ -242,11 +242,14 @@ SELECT c.name AS column_name,
        c.is_nullable,
        c.is_identity,
        c.is_computed,
-       c.is_rowversion,
+       c.generated_always_type,
        c.collation_name,
        dc.definition AS default_definition,
-       ic.seed_value,
-       ic.increment_value,
+       -- Cast: sys.identity_columns exposes these as numeric(38,0), which the ODBC driver
+       -- reports as SQL type -16 (SQL_SS_TIMESTAMPOFFSET) and pyodbc refuses to read at all.
+       -- Identity seed and step are integers, so bigint is both faithful and readable.
+       CAST(ic.seed_value AS bigint) AS seed_value,
+       CAST(ic.increment_value AS bigint) AS increment_value,
        cc.definition AS computed_definition,
        cc.is_persisted AS computed_persisted
   FROM sys.columns AS c
@@ -316,12 +319,25 @@ def _max_length(data_type: str, raw: object) -> int | None:
     return length
 
 
+#: Types whose ``sys.columns.precision`` is *not* the declared precision.
+#:
+#: For ``datetime2``/``datetimeoffset``/``time``, SQL Server always reports the maximum
+#: fractional-second precision (27, 34 and 16 respectively) no matter how the column was
+#: declared, so a ``datetime2(3)`` column arrives claiming 27. The declared precision for
+#: these types *is* the scale, which the server does report faithfully.
+_FRACTIONAL_SECOND_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
+
+
 def _precision_scale(
     data_type: str, precision: object, scale: object
 ) -> tuple[int | None, int | None]:
-    if data_type.lower() not in _PRECISION_TYPES:
+    lowered = data_type.lower()
+    if lowered not in _PRECISION_TYPES:
         return None, None
-    return _as_int(precision), _as_int(scale)
+    resolved_scale = _as_int(scale)
+    if lowered in _FRACTIONAL_SECOND_TYPES:
+        return resolved_scale, resolved_scale
+    return _as_int(precision), resolved_scale
 
 
 def column_from_row(
@@ -333,7 +349,9 @@ def column_from_row(
     precision, scale = _precision_scale(data_type, row.get("precision"), row.get("scale"))
     is_computed = _as_bool(row.get("is_computed"))
     is_identity = _as_bool(row.get("is_identity"))
-    is_rowversion = _as_bool(row.get("is_rowversion")) or data_type.lower() == "rowversion"
+    # Derived from the type name: sys.columns has no is_rowversion column (verified against
+    # SQL Server 2022), and the "timestamp" type is exactly the rowversion type.
+    is_rowversion = data_type.lower() == "rowversion"
     computed_definition = _as_str(row.get("computed_definition"))
 
     return Column(
@@ -357,6 +375,7 @@ def column_from_row(
         computed_persisted=(
             _as_bool(row.get("computed_persisted")) if is_computed and computed_definition else None
         ),
+        generated_always_type=_as_int(row.get("generated_always_type")) or 0,
     )
 
 

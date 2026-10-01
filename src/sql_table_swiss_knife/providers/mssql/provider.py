@@ -5,10 +5,12 @@ One connection per active session, always driven from a single dedicated worker 
 sees ``pyodbc.Error`` (DESIGN §5.2).
 """
 
+import re
 import time
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import replace
+from datetime import time as dt_time
 from typing import Any
 
 from ...domain.catalog import Database, Table, TableSummary
@@ -36,8 +38,10 @@ from . import metadata as md
 from .connection import (
     SingleThreadRunner,
     build_connection_string,
+    execute,
     fetch_all,
     import_pyodbc,
+    register_output_converters,
 )
 from .dialect import TSqlDialect
 from .errors import sanitize_driver_message
@@ -50,6 +54,43 @@ __all__ = [
 
 #: Wording for "the row I fetched is no longer what the database holds" (FR-7.8).
 CONFLICT_REASON = "row changed by someone else (0 rows affected)"
+
+#: Matches the dialect's named placeholders (``@p0``, ``@p12``, ...).
+_PLACEHOLDER_RE = re.compile(r"@p(\d+)")
+
+
+def to_positional(sql: str) -> str:
+    """Rewrite the dialect's ``@pN`` placeholders as ODBC positional ``?`` markers.
+
+    The dialect names placeholders ``@p0`` so the preview legend can label each value
+    (FR-5.2a). That naming is meaningless to the driver: through ODBC only ``?`` marks a
+    parameter position, so sending the named form as-is leaves the statement with zero
+    markers and the driver rejects it with "The SQL contains 0 parameter markers, but N
+    parameters were supplied".
+
+    ``sqlgen`` allocates indices contiguously and in binding order, so replacing them
+    left to right keeps the values aligned with the markers. Longest index first avoids
+    a partial match turning ``@p1`` into ``@p10``'s prefix.
+    """
+    indices = sorted({int(index) for index in _PLACEHOLDER_RE.findall(sql)}, reverse=True)
+    if not indices:
+        return sql
+    replacements = dict.fromkeys(indices, "?")
+    return _PLACEHOLDER_RE.sub(lambda match: replacements[int(match.group(1))], sql)
+
+
+def bindable(value: object) -> object:
+    """Return ``value`` in a form the ODBC driver stores without losing precision.
+
+    Binding a ``datetime.time`` that carries microseconds stores them as zero: pyodbc sends
+    ``SQL_SS_TIME2`` with a scale of 0, so ``13:45:56.123456`` lands in a ``time(7)`` column
+    as ``13:45:56``. The same literal sent as text keeps all seven fractional digits, so
+    only values that actually have microseconds are converted — a plain ``time`` is left
+    alone so it still binds as a time.
+    """
+    if isinstance(value, dt_time) and value.microsecond:
+        return value.isoformat()
+    return value
 
 
 def _elapsed_ms(started: float) -> int:
@@ -142,7 +183,7 @@ class MssqlConnection:
         """Worker-thread body of :meth:`aexecute`."""
         cursor = self._raw.cursor()
         try:
-            cursor.execute(sql, tuple(params) if params is not None else None)
+            execute(cursor, sql, params)
             rowcount = cursor.rowcount if cursor.rowcount is not None else 0
             description = cursor.description or ()
             if not description:
@@ -221,14 +262,23 @@ class MssqlProvider:
         connection_string = build_connection_string(profile, password)
         runner = SingleThreadRunner()
         try:
+            # autocommit=True is required, not cosmetic. pyodbc/ODBC defaults it to off,
+            # which leaves every connection sitting inside an implicit transaction
+            # (@@TRANCOUNT = 1 straight after connecting). Reads then hold open locks and a
+            # failed Apply leaks the transaction instead of unwinding it. With it on, the
+            # BEGIN/COMMIT/ROLLBACK statements in execute_changes are the only transactions
+            # that exist, and they nest correctly inside ODBC's own per-statement handling.
             raw = await runner.run(
                 pyodbc.connect,
                 connection_string,
                 timeout=profile.options.connect_timeout_s,
+                autocommit=True,
             )
         except BaseException:
             await runner.close()
             raise
+        # Must happen on the worker thread that owns the connection, and before any read.
+        await runner.run(register_output_converters, raw)
         return MssqlConnection(raw, runner, profile)
 
     async def test_connection(
@@ -291,7 +341,10 @@ class MssqlProvider:
         """
         validate_identifier(schema, kind="schema name")
         validate_identifier(name, kind="table name")
-        target = f"[{schema}].[{name}]"
+        # Quote through the dialect: a name containing "]" has to become "]]", and a naive
+        # f-string produces "[Lookups].[Weird ]Name]", which OBJECT_ID parses as something
+        # else entirely and resolves to no object at all.
+        target = self._dialect.quote_qualified(schema, name)
 
         handle = self._handle(conn)
         object_rows = await handle.afetch(OBJECT_LOOKUP_SQL, (target,))
@@ -347,7 +400,7 @@ class MssqlProvider:
             # without a COUNT(*), which would scan the table on every page.
             over_fetched = replace(self._ordered(table, spec), limit=spec.limit + 1)
             select = build_select(self._dialect, table, over_fetched)
-            rows = await handle.afetch(select.sql, select.params)
+            rows = await handle.afetch(to_positional(select.sql), select.param_values)
         else:
             qualified = self._dialect.quote_qualified(table.schema, table.name)
             column_sql = ", ".join(
@@ -424,7 +477,8 @@ class MssqlProvider:
                 )
             for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
                 rowcount, returned = await handle.aexecute(
-                    statement.sql_parametrized, statement.param_values
+                    to_positional(statement.sql_parametrized),
+                    tuple(bindable(value) for value in statement.param_values),
                 )
                 if is_concurrency_conflict(change, rowcount):
                     conflicts.append(RowConflict(change, statement, CONFLICT_REASON))

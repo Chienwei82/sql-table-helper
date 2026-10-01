@@ -1,10 +1,15 @@
 # SQL Server 2022 (Developer) + catalog-like sample database for swiss-knife testing.
 #
-#   docker compose up -d        # start server, then load init/01_sample_catalog.sql
+#   docker compose up -d        # start server, then load the init/*.sql fixtures
 #   docker compose down -v      # wipe data
 #
 # Connect: localhost,1433 · user sa · password ${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}
 # Database: SwissKnifeSample
+#
+# The explicit project name keeps the container name stable (swissknife-live-sqlserver-1),
+# which run-live.sh relies on to find the shared network.
+
+name: swissknife-live
 
 services:
   sqlserver:
@@ -60,7 +65,14 @@ services:
         [ -n "$$SQLCMD" ] || { echo "sqlcmd not found in image" >&2; exit 1; }
         TRUST=""
         case "$$SQLCMD" in *tools18*) TRUST="-C" ;; esac
-        "$$SQLCMD" -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" $$TRUST -b -i /init/01_sample_catalog.sql
+        # Run every /init/*.sql in name order so the fixtures can be split by topic and
+        # each file stays independently re-runnable.
+        # -I turns SET QUOTED_IDENTIFIER ON: required by the PERSISTED computed
+        # columns and by any object sqlcmd would otherwise reject at CREATE time.
+        for f in /init/*.sql; do
+          echo "--- loading $$f"
+          "$$SQLCMD" -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" $$TRUST -b -I -i "$$f"
+        done
         echo "SwissKnifeSample database initialized."
 
 volumes:
