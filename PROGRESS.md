@@ -15,18 +15,18 @@ and affected tables, the typed production word, the local audit log), robustness
 huge/wide/long/binary tables and connection loss, the `F1` help screen with a configurable
 keymap, documentation, and packaging.
 
-**Then: a code review round that fixed ten defects (uncommitted).** Five were P0 — all
-reproduced by executing the code, each with a regression test verified to fail without the
-fix. The most serious: a NULL optimistic-concurrency guard allocated a bound parameter it
-never rendered, so the *first* Apply of any row with a nullable unchanged column on a
-table without a rowversion would have been rejected by the driver. It was invisible because
-the provider tests bind against a fake cursor and `tests/live/` has no `execute_changes`
-test. Two of the five were pinned by tests asserting the buggy behaviour, and
-`build_merge`/`build_table_insert` had no tests at all. The five P1 items fixed: generated
-SQL ignored staged edits; a filled-in new row displayed `NULL`; `fetch_more` dropped the
-active filter; `_new_rows` was a second source of truth that drifted from the change
-buffer; and SQL Server error wording and `LIKE` escaping lived inside `services/` instead of
-on `SqlDialect`.
+**Then: a code review round that fixed ten defects** (commit `7a4ab49`). Five were P0 —
+all reproduced by executing the code, each with a regression test verified to fail without
+the fix. The most serious: a NULL optimistic-concurrency guard allocated a bound parameter
+it never rendered, so the *first* Apply of any row with a nullable unchanged column on a
+table without a rowversion would have been rejected by the driver. It was invisible
+because the provider tests bind against a fake cursor and `tests/live/` has no
+`execute_changes` test. Two of the five were pinned by tests asserting the buggy
+behaviour, and `build_merge`/`build_table_insert` had no tests at all. The five P1 items
+fixed: generated SQL ignored staged edits; a filled-in new row displayed `NULL`;
+`fetch_more` dropped the active filter; `_new_rows` was a second source of truth that
+drifted from the change buffer; and SQL Server error wording and `LIKE` escaping lived
+inside `services/` instead of on `SqlDialect`.
 
 | Milestone | Scope | Status |
 |---|---|---|
