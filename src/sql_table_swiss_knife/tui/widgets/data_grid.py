@@ -237,13 +237,6 @@ class DataGrid(DataTable[str]):
         """
         return tuple(format_cell_value(row.get(column.name)) for column in self._columns)
 
-    def rerender_row(self, index: int) -> None:
-        """Re-render one row in place (a stage, revert or undo changed it)."""
-        if not 0 <= index < len(self._rows):
-            return
-        for column_index, text in enumerate(self.render_row(self._rows[index])):
-            self.update_cell_at(Coordinate(index, column_index), text, update_width=False)
-
     # -- the staged overlay -------------------------------------------------
 
     def apply_overlay(
