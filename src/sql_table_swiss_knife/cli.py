@@ -1,4 +1,4 @@
-"""Command-line entry point for ``sql-table-swiss-knife`` / ``stsk``.
+"""Command-line entry point for ``sql-table-manager`` / ``stm``.
 
 Default (no subcommand): launch the TUI. Subcommands are temporary developer tools
 landed with the corresponding milestone; ``inspect`` prints table metadata as a Rich
@@ -17,7 +17,13 @@ from rich.table import Table as RichTable
 from . import __version__
 from .domain import AuthMode, Database, Table, TableSummary
 from .providers import get_provider
-from .storage import ProfileStore, config_dir, default_secret_store, resolve_password
+from .storage import (
+    ProfileStore,
+    config_dir,
+    default_secret_store,
+    migrate_legacy_config,
+    resolve_password,
+)
 from .tui.app import SwissKnifeApp
 
 __all__ = ["build_parser", "main", "render_metadata"]
@@ -25,7 +31,7 @@ __all__ = ["build_parser", "main", "render_metadata"]
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="sql-table-swiss-knife",
+        prog="sql-table-manager",
         description=(
             "View and edit rows of catalog/lookup tables without writing SQL "
             "— and see the SQL it runs."
@@ -255,9 +261,25 @@ async def _run_inspect(args: argparse.Namespace) -> int:
         await provider.disconnect(conn)
 
 
+def _migrate_config_on_startup() -> None:
+    """Carry a pre-rename config directory forward, once, silently on failure.
+
+    Called only from :func:`main`, so the migration happens on the real entry point and
+    never when a test constructs the app directly. A failure is deliberately swallowed:
+    missing preferences must not stop the tool from starting.
+    """
+    try:
+        migrated = migrate_legacy_config()
+    except Exception:
+        return
+    if migrated is not None:
+        print(f"migrated configuration into {migrated}", file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse CLI arguments, then run the requested command (default: the TUI)."""
     args = build_parser().parse_args(argv)
+    _migrate_config_on_startup()
     if args.print_config_dir:
         print(config_dir())
         return 0

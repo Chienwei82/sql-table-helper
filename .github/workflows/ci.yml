@@ -1,0 +1,49 @@
+# The five gates from AGENTS.md, run on every push to main and every pull request.
+#
+# They are the same commands a developer runs locally, in the same order, so a green CI
+# means exactly what a green local run means — no extra flags that could hide a failure.
+# The live suite is intentionally absent: it needs a real SQL Server and is env-gated
+# (tests/live/run-live.sh), so it stays a locally-run, opt-in check.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      # pyodbc is imported lazily (see providers/mssql/connection.import_pyodbc) and every
+      # test uses FakeProvider, so no ODBC driver manager is needed to run the gates.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Types
+        run: uv run mypy
+
+      - name: Architecture
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest

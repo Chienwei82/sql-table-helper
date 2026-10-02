@@ -1,5 +1,5 @@
 [project]
-name = "sql-table-swiss-knife"
+name = "sql-table-manager"
 dynamic = ["version"]
 description = "Terminal (TUI) app to view and edit rows of catalog/lookup tables without writing SQL — and to show the SQL it runs."
 readme = "README.md"
@@ -41,8 +41,8 @@ Source = "https://github.com/Chienwei82/sql-table-helper"
 Issues = "https://github.com/Chienwei82/sql-table-helper/issues"
 
 [project.scripts]
-sql-table-swiss-knife = "sql_table_swiss_knife.cli:main"
-stsk = "sql_table_swiss_knife.cli:main"
+sql-table-manager = "sql_table_swiss_knife.cli:main"
+stm = "sql_table_swiss_knife.cli:main"
 
 [dependency-groups]
 dev = [

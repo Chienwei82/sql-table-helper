@@ -73,6 +73,36 @@ async def test_opening_a_table_shows_a_grid_and_the_inspector(
         assert "TABLE SUMMARY" in _panel_text(app)
 
 
+async def test_the_palette_lists_the_hidden_advanced_actions(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """Hiding an action from the footer must never strand it: ctrl+p reaches everything.
+
+    The point of the CRUD-first footer is that the everyday actions are taught there;
+    the palette is what keeps the advanced ones (SQL panel, generate, import/export,
+    sort, columns, filter…) discoverable. ``PALETTE_ACTIONS`` is the mechanism, and this
+    asserts the mechanism through the real screen rather than the class attribute.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.pause()
+        screen = await _open(app, pilot, "Country")
+        names = {action.name for action in screen.command_actions()}
+
+        # The everyday CRUD path, all visible.
+        assert "Edit cell" in names
+        assert "New row" in names
+        assert "Delete row" in names
+        assert "Commit changes" in names
+        # The advanced surface, off the footer but still enumerated.
+        assert "SQL panel" in names
+        assert "Generate SQL for" in names
+        assert "Import file" in names
+        assert "Filter" in names
+        # The manipulative-only keys must not leak into the palette.
+        assert "Extend" not in names
+
+
 async def test_the_inspector_toggles_with_f2(
     app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:
@@ -93,19 +123,29 @@ async def test_the_inspector_toggles_with_f2(
         assert not panel.collapsed
 
 
-async def test_the_hint_bar_reports_the_inspector_state(
+async def test_the_hint_bar_leads_with_the_crud_actions(
     app_factory: AppFactory, seeded_profiles: ProfileStore
 ) -> None:
-    """Context-sensitive hints (DESIGN §9.2): the verb follows the panel state."""
+    """CRUD-first hints: the footer teaches edit/new/delete/commit, not the panels.
+
+    The advanced surfaces (inspector, SQL panel, generate) are no longer footer hints;
+    they live in the command palette, which the trailing ``^p`` hint advertises. The
+    footer should now read as the everyday path over the rows.
+    """
     app = app_factory(profiles=seeded_profiles)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.pause()
         screen = await _open(app, pilot, "Country")
-        assert "hide inspector" in screen.hints.hints[0].label
+        labels = [hint.label for hint in screen.hints_for()]
+        keys = [hint.key for hint in screen.hints_for()]
 
-        await pilot.press("f2")
-        await pilot.pause()
-        assert "show inspector" in screen.hints.hints[0].label
+        assert labels[0] == "edit cell"
+        assert "new row" in labels
+        assert "delete row" in labels
+        assert any(label.startswith("commit (") for label in labels)
+        assert "^p" in keys
+        # The advanced panels are reachable, but not from the footer.
+        assert "f2" not in keys and "f3" not in keys
 
 
 # -- inspector contents ------------------------------------------------------

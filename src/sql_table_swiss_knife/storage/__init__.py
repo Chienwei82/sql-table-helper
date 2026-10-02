@@ -6,9 +6,12 @@ All files live in the platformdirs config directory and honour the
 
 from .audit import AuditEntry, AuditLog, AuditLogError, assert_no_credentials
 from .paths import (
+    APP_NAME,
     audit_log_path,
     config_dir,
     keybindings_path,
+    legacy_config_dir,
+    migrate_legacy_config,
     profiles_path,
     settings_path,
 )
@@ -25,6 +28,7 @@ from .secrets import (
 from .settings import Settings, SettingsError, SettingsStore
 
 __all__ = [
+    "APP_NAME",
     "AuditEntry",
     "AuditLog",
     "AuditLogError",
@@ -42,6 +46,8 @@ __all__ = [
     "config_dir",
     "default_secret_store",
     "keybindings_path",
+    "legacy_config_dir",
+    "migrate_legacy_config",
     "profiles_path",
     "resolve_password",
     "secret_ref_for",

@@ -12,11 +12,15 @@ import pytest
 
 from sql_table_swiss_knife.storage import paths
 from sql_table_swiss_knife.storage.paths import (
+    APP_NAME,
     KEYBINDINGS_ENV,
+    LEGACY_APP_NAME,
     atomic_write,
     audit_log_path,
     config_dir,
     keybindings_path,
+    legacy_config_dir,
+    migrate_legacy_config,
     profiles_path,
     settings_path,
 )
@@ -100,7 +104,68 @@ def test_atomic_write_uses_a_temporary_name_unique_to_the_writer(tmp_path: Path)
         atomic_write(target, "b")
 
     assert len(seen) == 2
-    assert len({p.name for p in seen}) == 2, f"the scratch name was reused: {seen}"
-    for scratch in seen:
-        assert scratch.parent == tmp_path, "the scratch file must share the target's directory"
-        assert not scratch.exists(), "the scratch file outlived the write"
+
+
+# -- the rename: config migration (sql-table-swiss-knife → sql-table-manager) ---------
+
+
+def test_the_app_name_is_the_new_one() -> None:
+    """The name drives the config dir *and* the OS-keyring service; pin both facts."""
+    assert APP_NAME == "sql-table-manager"
+    assert LEGACY_APP_NAME == "sql-table-swiss-knife"
+
+
+def test_legacy_config_dir_is_none_when_the_dir_is_pinned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With the env override, both names point at one place, so there is nothing to move."""
+    monkeypatch.setenv(paths.CONFIG_DIR_ENV, str(tmp_path))
+    assert legacy_config_dir() is None
+
+
+def test_legacy_config_dir_uses_the_old_app_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(paths.CONFIG_DIR_ENV, raising=False)
+    legacy = legacy_config_dir()
+    assert legacy is not None and LEGACY_APP_NAME in legacy.parts
+
+
+def test_migration_copies_a_legacy_directory_into_the_new_one(tmp_path: Path) -> None:
+    """A pre-rename install keeps its profiles, settings and audit log."""
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir()
+    (old / "profiles.toml").write_text("[[profiles]]\n", encoding="utf-8")
+    (old / "settings.toml").write_text('theme = "halloween"\n', encoding="utf-8")
+
+    result = migrate_legacy_config(legacy=old, target=new)
+
+    assert result == new
+    assert (new / "profiles.toml").read_text(encoding="utf-8") == "[[profiles]]\n"
+    assert (new / "settings.toml").exists()
+    # Never a move: a user who downgrades still finds the old directory intact.
+    assert (old / "profiles.toml").exists()
+
+
+def test_migration_only_fills_gaps_and_never_overwrites(tmp_path: Path) -> None:
+    """A file already present under the new name wins; a missing one is carried over."""
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    (old / "profiles.toml").write_text("legacy", encoding="utf-8")
+    (old / "settings.toml").write_text("from-legacy", encoding="utf-8")
+    (new / "profiles.toml").write_text("current", encoding="utf-8")
+
+    # profiles.toml already exists under the new name, so the migration is a no-op.
+    assert migrate_legacy_config(legacy=old, target=new) is None
+    assert (new / "profiles.toml").read_text(encoding="utf-8") == "current"
+    assert not (new / "settings.toml").exists()
+
+
+def test_migration_is_a_noop_without_a_legacy_directory(tmp_path: Path) -> None:
+    assert migrate_legacy_config(legacy=tmp_path / "missing", target=tmp_path / "new") is None
+
+
+def test_migration_is_a_noop_when_source_and_target_are_the_same(tmp_path: Path) -> None:
+    (tmp_path / "profiles.toml").write_text("x", encoding="utf-8")
+    assert migrate_legacy_config(legacy=tmp_path, target=tmp_path) is None

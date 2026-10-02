@@ -1,4 +1,4 @@
-# sql-table-swiss-knife
+# sql-table-manager
 
 **Edita tablas de catálogo sin escribir SQL — y siempre ves el SQL que ejecuta.**
 
@@ -29,15 +29,16 @@ es deliberadamente la cosa pequeña.
 ### Qué hace
 
 - **Las ediciones se preparan, nunca son inmediatas.** Nada llega a la base de datos hasta
-  que pulsas Apply, y Apply lo ejecuta todo en una transacción: todo, o nada.
+  que confirmas, y confirmar lo ejecuta todo en una transacción: todo, o nada.
 - **El SQL está siempre en pantalla** (`F3`), tanto como se envía como como un script
   literal listo para copiar. Este es el objetivo de la herramienta: no tienes que *escribir*
   SQL, pero siempre puedes *leerlo* — y copiar el script para que un DBA lo ejecute por
   fuera.
 - **Seguro por defecto.** Solo lectura está activo por defecto en perfiles de producción;
-  una insignia roja `PROD` en la cabecera; el diálogo de Apply indica las cantidades y las
-  tablas afectadas y exige escribir una palabra contra producción; cada Apply —confirmado,
-  revertido o rechazado— queda registrado en un registro de auditoría local.
+  una insignia roja `PROD` en la cabecera; el diálogo de confirmación indica las cantidades
+  y las tablas afectadas y exige escribir una palabra contra producción; cada
+  commit —confirmado, revertido o rechazado— queda registrado en un registro de
+  auditoría local.
 - **Rechaza en lugar de adivinar.** Una tabla sin clave primaria es de solo lectura,
   porque un `UPDATE` sin clave es `WHERE 1=1` por accidente.
 - **Los datos incómodos están previstos.** Las tablas anchas se desplazan con la columna
@@ -68,12 +69,18 @@ desviarse del código sin que una prueba falle.
 
 **Explorador de tablas** — árbol de esquemas con las insignias: `🔑` clave primaria,
 `🔗` claves foráneas, `⚡` triggers, `⚠` **sin** clave primaria (solo lectura), `👁` vista.
+Una tabla estimada en más de 100 filas pregunta si quieres añadir un filtro antes de
+abrirse.
 
 ![Explorador de tablas](docs/screenshots/table_browser.svg)
 
 **El espacio de trabajo** — rejilla de datos, inspector y (con `F3`) el panel SQL. Fíjate en
 la columna clave congelada y en las insignias de columna: tipo, `🔒` solo lectura, `✱`
-actualizada, `∅` admite nulos.
+actualizada, `∅` admite nulos. El pie de página enseña el camino de cada día — editar, fila
+nueva, borrar, deshacer, copiar/pegar, `ctrl+s` para confirmar — y la barra de commit sobre
+la rejilla indica qué hay preparado y que todavía no se escribe nada. Todo lo demás (panel
+SQL, generar, importar/exportar, columnas, orden, filtro) vive en la paleta de comandos
+(`ctrl+p`).
 
 ![Espacio de trabajo de tabla](docs/screenshots/table_editor_split_view.svg)
 
@@ -81,10 +88,10 @@ actualizada, `∅` admite nulos.
 
 ![Tabla ancha con clave congelada](docs/screenshots/wide_table_frozen_key.svg)
 
-**Apply contra producción** — borde rojo, las cantidades, las tablas afectadas, la garantía
+**Commit contra producción** — borde rojo, las cantidades, las tablas afectadas, la garantía
 de transacción y una palabra que hay que escribir.
 
-![Confirmación de Apply en producción](docs/screenshots/apply_confirmation_production.svg)
+![Confirmación de commit en producción](docs/screenshots/apply_confirmation_production.svg)
 
 **Vista expandida de celda** — una celda de texto largo completa, con ajuste duro y solo
 lectura.
@@ -108,7 +115,7 @@ lectura.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-swiss-knife
+uv run sql-table-manager
 ```
 
 Requiere Python 3.14. Para conectarte también necesitas un **gestor de drivers ODBC** y el
@@ -119,7 +126,7 @@ intercepta con una CA privada hace fallar `uv sync` de un modo que `pip` no tend
 Consulta [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md) y la vía con `uv pip` de abajo.
 
 > El paquete **aún no está publicado en PyPI**, así que la línea `uv tool install
-> sql-table-swiss-knife` que antes estaba aquí no funciona. Instala desde una copia del
+> sql-table-manager` que antes estaba aquí no funciona. Instala desde una copia del
 > repositorio, o genera un wheel con `uv build` e instala el resultado.
 
 ### Instalar con `uv pip` en lugar de `uv sync`
@@ -133,7 +140,7 @@ source .venv/bin/activate                # Windows: .venv\Scripts\activate
 uv pip install -e .                      # solo dependencias de ejecución
 uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
 uv pip install -e ".[clipboard]"         # + el mejor backend de portapapeles
-sql-table-swiss-knife                    # o el alias corto: stsk
+sql-table-manager                    # o el alias corto: stm
 ```
 
 Dos cosas que conviene saber, porque si no te van a dar un disgusto:
@@ -158,7 +165,7 @@ También se admite una compilación de **un solo archivo** para máquinas restri
 dejar la aplicación en un servidor sin tocar su Python:
 
 ```bash
-uv run scripts/build_standalone.py        # escribe dist/sql-table-swiss-knife (un archivo)
+uv run scripts/build_standalone.py        # escribe dist/sql-table-manager (un archivo)
 ```
 
 Usa [PyInstaller](https://pyinstaller.org) (declarado como extra opcional `standalone`) y
@@ -175,8 +182,8 @@ uv run pytest -m live       # pruebas de integración (necesitan el servidor doc
 uv run ruff check .         # lint
 uv run ruff format --check .  # comprobación de formato
 uv run mypy                 # comprobación de tipos estricta
-uv run sql-table-swiss-knife --version
-uv run sql-table-swiss-knife   # iniciar la TUI (salir: ctrl+q)
+uv run sql-table-manager --version
+uv run sql-table-manager   # iniciar la TUI (salir: ctrl+q)
 ```
 
 ## Uso de la TUI
@@ -189,28 +196,32 @@ uv run sql-table-swiss-knife   # iniciar la TUI (salir: ctrl+q)
 | `b` | conexiones | cambiar de base de datos en la sesión activa |
 | `/` | tablas | búsqueda mientras escribes sobre `schema.table` |
 | `f6` | tablas | plegar/desplegar los grupos de esquemas |
-| `enter` | tablas | abrir la tabla seleccionada (rejilla + inspector) |
-| `f2` | tabla | mostrar/ocultar el panel del inspector |
-| `f3` | tabla | mostrar/ocultar el **panel SQL** (F3) |
-| `v` | tabla | alternar el renderizado del SQL: parametrizado → literal → script |
-| `y` | tabla | copiar el SQL — el script entero, o la sentencia seleccionada |
-| `ctrl+c` | tabla | copiar la celda / fila / columna / selección en el formato actual |
-| `b` | tabla | alternar el alcance de copia: celda → fila → columna → selección |
-| `p` | tabla | alternar el formato de copia TSV → CSV → JSON (recordado en settings.toml) |
-| `ctrl+v` | tabla | pegar (el pegado entre corchetes del terminal es la vía principal) |
+| `enter` | tablas | abrir la tabla seleccionada (una tabla estimada en más de 100 filas ofrece primero un filtro) |
+| `enter` / `f4` | tabla | **editar** la celda enfocada |
+| `n` | tabla | **fila nueva** (preparada, nunca escrita directamente) |
+| `delete` | tabla | **eliminar** la fila enfocada (preparada, nunca escrita directamente) |
+| `ctrl+z` | tabla | **deshacer** la última acción de preparación |
+| `ctrl+c` / `ctrl+v` | tabla | copiar la celda / fila / columna / selección · pegar un bloque |
+| `ctrl+s` | tabla | **confirmar** todos los cambios preparados (tras la confirmación) |
+| `ctrl+p` | en cualquier sitio | paleta de comandos (todo lo que ofrece la pantalla, incl. las teclas de abajo) |
+| `f2` / `f3` | tabla | panel del inspector / **panel SQL** (vía paleta o estas teclas) |
+| `v` / `y` | tabla | alternar el renderizado del SQL (parametrizado → literal → script) / copiar el SQL |
+| `b` / `p` | tabla | alternar el alcance de copia (celda → fila → columna → selección) / alternar el formato de copia |
 | `i` / `o` | tabla | importar un archivo CSV/JSON / exportar las filas en pantalla |
-| `g` | tabla | "generar SQL para…" esta fila o el filtro actual |
-| `m` | tabla | traer la siguiente página de filas (página de 1000 filas por defecto) |
-| `r` | tabla | recargar metadatos y filas |
+| `g` | tabla | “generar SQL para…” esta fila o el filtro actual |
+| `c` / `f` / `s` | tabla | columnas / filtro rápido / ordenar por la columna enfocada |
+| `w` | tabla | **expandir** la celda enfocada — texto completo, o volcado hexadecimal si es binario |
+| `m` / `r` | tabla | traer la siguiente página de filas (página de 1000 filas por defecto) / recargar metadatos y filas |
 | flechas / `enter` | tabla | mover el cursor de celda (el inspector sigue) / explicar la celda |
-| `ctrl+p` | en cualquier sitio | paleta de comandos (búsqueda difusa sobre las acciones de la pantalla actual) |
 | `f1` (o `?`) | en cualquier sitio | la pantalla de ayuda: todos los atajos, agrupados |
 | `f5` | tabla | alternar el modo de solo lectura para esta sesión |
-| `ctrl+s` | tabla | aplicar todos los cambios preparados (tras la confirmación) |
-| `w` | tabla | **expandir** la celda enfocada — texto completo, o volcado hexadecimal si es binario |
 | `ctrl+t` | en cualquier sitio | cambiar de tema (persistido en `settings.toml`) |
 | `esc` | en cualquier sitio | retroceder un nivel |
 | `ctrl+q` | en cualquier sitio | salir (primero se cierra la conexión) |
+
+El pie de página solo lista el camino CRUD (editar / fila nueva / borrar / deshacer /
+copiar / pegar / confirmar) — un pie que lista treinta teclas no enseña ninguna de ellas.
+Todo lo demás está a un `ctrl+p`, listado por la paleta aunque no tenga entrada en el pie.
 
 La lista completa y autorizada está dentro de la propia aplicación: pulsa `F1`. La tabla
 anterior es una comodidad, y `tests/unit/tui/test_keybindings.py` falla si las dos divergen.
@@ -221,8 +232,8 @@ En la primera ejecución se escribe una plantilla `keybindings.toml` vacía en e
 de configuración. Muestra la ruta con `--print-config-dir`, edita el archivo, reinicia:
 
 ```bash
-uv run sql-table-swiss-knife --print-config-dir
-# → /home/you/.config/sql-table-swiss-knife
+uv run sql-table-manager --print-config-dir
+# → /home/you/.config/sql-table-manager
 ```
 
 ```toml
@@ -328,11 +339,11 @@ Si omites `read_only` decide el entorno: **producción se abre en solo lectura**
 se abre con escritura. Un perfil de producción que pueda escribir por accidente es el fallo
 que esto evita, así que la respuesta segura es el valor por defecto y activar la escritura
 es siempre un acto explícito y visible. `f5` lo alterna para la sesión; la insignia cambia
-de inmediato. `sql-table-swiss-knife --read-only` fuerza solo lectura para todo el proceso y
+de inmediato. `sql-table-manager --read-only` fuerza solo lectura para todo el proceso y
 **bloquea el alternador** — una sesión de solo lectura de la que no puedes salir por
 casualidad.
 
-El modo de solo lectura se aplica en el límite de la *preparación*, no en Apply: las
+El modo de solo lectura se aplica en el límite de la *preparación*, no en el commit: las
 ediciones se rechazan donde se habrían hecho, así que una sesión de solo lectura nunca
 acumula trabajo que no se le permitirá confirmar.
 
@@ -344,11 +355,11 @@ color, porque "¿en qué base de datos estoy?" y "¿puedo escribir?" son dos pre
 distintas y el color por sí solo no responde a ninguna de forma fiable.
 
 La insignia la gobierna el *mismo* objeto `SafetyPolicy` que controla la escritura. Una
-insignia que dijera `DEV` mientras el diálogo de Apply exige una palabra de producción sería
-peor que no tener insignia, así que ambas son estructuralmente incapaces de discrepar — y
-hay una prueba que lo fija.
+insignia que dijera `DEV` mientras el diálogo de confirmación exige una palabra de
+producción sería peor que no tener insignia, así que ambas son estructuralmente incapaces
+de discrepar — y hay una prueba que lo fija.
 
-### La confirmación de Apply
+### La confirmación del commit
 
 `ctrl+s` nunca escribe directamente. El diálogo declara lo que va a pasar:
 
@@ -489,7 +500,7 @@ código.
 Los perfiles viven en el directorio de configuración de platformdirs (con
 `SWISSKNIFE_CONFIG_DIR` se sobrescribe) como `profiles.toml`. **Las contraseñas nunca se
 escriben en ese archivo** — viven en el almacén de claves del sistema operativo (servicio
-`sql-table-swiss-knife`, cuenta = `secret_ref`) o se piden en cada sesión cuando no hay
+`sql-table-manager`, cuenta = `secret_ref`) o se piden en cada sesión cuando no hay
 ningún backend de keyring disponible:
 
 ```toml
@@ -532,9 +543,9 @@ Un comando temporal del Hito 2 que imprime los metadatos introspeccionados como 
 Rich, para que puedas comprobar la capa `sys.*` sin lanzar la TUI:
 
 ```bash
-uv run sql-table-swiss-knife inspect <profile> dbo.Region     # metadatos completos
-uv run sql-table-swiss-knife inspect <profile> x --list       # tablas + recuentos de filas
-uv run sql-table-swiss-knife inspect <profile> x --databases  # bases de datos
+uv run sql-table-manager inspect <profile> dbo.Region     # metadatos completos
+uv run sql-table-manager inspect <profile> x --list       # tablas + recuentos de filas
+uv run sql-table-manager inspect <profile> x --databases  # bases de datos
 ```
 
 Resuelve la contraseña desde el keyring, preguntando si hace falta. Se espera que este
@@ -619,6 +630,12 @@ completitud:
   listándola como fuera de alcance.** El código y la especificación discrepan; la
   especificación aún no se ha corregido. Trata el README como lo vigente.
 - **`inspect` es un comando temporal de desarrollo** y se reescribirá o se eliminará.
+- **La migración del cambio de nombre es una copia, no un movimiento, y las contraseñas no
+  se migran.** Un directorio `~/.config/sql-table-swiss-knife` existente se copia al nuevo
+  `sql-table-manager` en el primer arranque — solo para rellenar huecos: un archivo que ya
+  existe con el nombre nuevo gana — pero los secretos del keyring dependen del nombre del
+  servicio, así que una contraseña guardada con el nombre antiguo hay que introducirla una
+  vez más.
 
 ## Documentación
 

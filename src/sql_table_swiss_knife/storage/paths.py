@@ -1,6 +1,13 @@
-"""Config file locations via platformdirs, with a test override (DESIGN §13)."""
+"""Config file locations via platformdirs, with a test override (DESIGN §13).
+
+The application was renamed from ``sql-table-swiss-knife`` to ``sql-table-manager``, so
+:func:`migrate_legacy_config` copies a pre-existing configuration directory forward exactly
+once. It is a *copy*, never a move, and only fills gaps: a file that already exists under
+the new name is left untouched.
+"""
 
 import os
+import shutil
 from pathlib import Path
 
 from platformdirs import user_config_path
@@ -10,16 +17,27 @@ __all__ = [
     "CONFIG_DIR_ENV",
     "KEYBINDINGS_ENV",
     "KEYBINDINGS_FILENAME",
+    "LEGACY_APP_NAME",
     "atomic_write",
     "audit_log_path",
     "config_dir",
     "keybindings_path",
+    "legacy_config_dir",
+    "migrate_legacy_config",
     "profiles_path",
     "settings_path",
 ]
 
 #: Application name used for platformdirs locations and the OS keyring service.
-APP_NAME = "sql-table-swiss-knife"
+APP_NAME = "sql-table-manager"
+
+#: The name this application used before it was renamed; only the migration reads it.
+#: The OS-keyring *service* is also keyed on the name, so secrets stored under the old
+#: name are not carried over (the file holds references, not secrets) — see the README.
+LEGACY_APP_NAME = "sql-table-swiss-knife"
+
+#: Configuration files carried forward by :func:`migrate_legacy_config`.
+_MIGRATED_FILES = ("profiles.toml", "settings.toml", "keybindings.toml", "audit.log.jsonl")
 
 #: Environment variable overriding the config directory (used by tests and portable setups).
 CONFIG_DIR_ENV = "SWISSKNIFE_CONFIG_DIR"
@@ -40,6 +58,54 @@ def config_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path(user_config_path(APP_NAME, appauthor=False))
+
+
+def legacy_config_dir() -> Path | None:
+    """The pre-rename configuration directory, or ``None`` when it cannot apply.
+
+    ``None`` means "do not migrate": the caller pinned the directory with the env
+    override, so both names point at the same place and there is nothing to carry over.
+    """
+    if os.environ.get(CONFIG_DIR_ENV):
+        return None
+    return Path(user_config_path(LEGACY_APP_NAME, appauthor=False))
+
+
+def migrate_legacy_config(*, legacy: Path | None = None, target: Path | None = None) -> Path | None:
+    """Copy a pre-rename config directory into the current one, once.
+
+    Returns the target directory when a migration happened, or ``None`` when there was
+    nothing to do (no legacy directory, or the new one already holds a ``profiles.toml``).
+
+    The copy is deliberately conservative:
+
+    * **never a move** — the legacy directory is left exactly as it was, so a user who
+      downgrades keeps working;
+    * **never an overwrite** — a file that already exists under the new name wins;
+    * **never a crash** — a failure here must not stop the app from starting (the caller
+      swallows it), because a config convenience is not worth a refusing-to-run tool.
+
+    OS-keyring secrets are *not* migrated: the keyring service name is derived from
+    :data:`APP_NAME`, so stored secrets must be re-entered once. Only the file that holds
+    the (non-secret) references is copied.
+    """
+    source = legacy if legacy is not None else legacy_config_dir()
+    if source is None or not source.is_dir():
+        return None
+    destination = target if target is not None else config_dir()
+    if source.resolve() == destination.resolve():
+        return None
+    if (destination / "profiles.toml").exists():
+        return None
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = False
+    for name in _MIGRATED_FILES:
+        origin = source / name
+        destination_file = destination / name
+        if origin.is_file() and not destination_file.exists():
+            shutil.copy2(origin, destination_file)
+            copied = True
+    return destination if copied else None
 
 
 def profiles_path() -> Path:

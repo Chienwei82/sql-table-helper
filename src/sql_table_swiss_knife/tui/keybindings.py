@@ -130,7 +130,7 @@ ACTIONS: Final[tuple[BindingDoc, ...]] = (
     _doc(
         ActionId.APPLY,
         "ctrl+s",
-        "Apply every staged change in one transaction (asks first)",
+        "Commit every staged change in one transaction (asks first)",
         "Safety",
     ),
     _doc(
@@ -151,7 +151,7 @@ ACTIONS: Final[tuple[BindingDoc, ...]] = (
         "Expand the focused cell (wrapped text, hex dump for binary)",
         "Editing & staging",
     ),
-    _doc(ActionId.INSERT_ROW, "ctrl+n", "Stage a new row", "Editing & staging"),
+    _doc(ActionId.INSERT_ROW, "n", "Stage a new row", "Editing & staging"),
     _doc(ActionId.DUPLICATE_ROW, "ctrl+d", "Stage a copy of the focused row", "Editing & staging"),
     _doc(ActionId.DELETE_ROW, "delete", "Mark the focused row for deletion", "Editing & staging"),
     _doc(ActionId.UNDO, "ctrl+z", "Undo the last staging action", "Editing & staging"),

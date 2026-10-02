@@ -75,9 +75,9 @@ class AppServices:
 
 
 class SwissKnifeApp(App[None]):
-    """sql-table-swiss-knife: screen stack, theming and global bindings."""
+    """sql-table-manager: screen stack, theming and global bindings."""
 
-    TITLE = "sql-table-swiss-knife"
+    TITLE = "sql-table-manager"
 
     CSS = """
     #screen-body {

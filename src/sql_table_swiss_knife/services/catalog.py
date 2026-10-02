@@ -11,7 +11,34 @@ from dataclasses import dataclass
 from ..domain.catalog import Database, Table, TableSummary
 from .connection import ConnectionService
 
-__all__ = ["CatalogService", "SchemaGroup", "filter_summaries", "group_by_schema"]
+__all__ = [
+    "LARGE_TABLE_THRESHOLD",
+    "CatalogService",
+    "SchemaGroup",
+    "filter_summaries",
+    "group_by_schema",
+    "needs_filter_prompt",
+]
+
+#: Above this many rows, opening a table offers a filter first (FR-2.5). A table bigger
+#: than a person can scan by eye is exactly the one a filter helps; the prompt is a
+#: courtesy, never a gate — the user can always open the whole table. Configurable via
+#: ``filter_prompt_threshold`` in ``settings.toml`` (0 disables it).
+LARGE_TABLE_THRESHOLD = 100
+
+
+def needs_filter_prompt(row_count: int | None, *, threshold: int = LARGE_TABLE_THRESHOLD) -> bool:
+    """Whether opening a table with ``row_count`` rows should offer a filter first.
+
+    ``None`` means the count is unknown — the server's estimate is absent for some views
+    and for tables whose statistics were never built — and an unknown count never
+    prompts: badgering someone to filter a table that may hold three rows is worse than
+    the occasional unfiltered open. A ``threshold`` of 0 (or less) disables the prompt
+    entirely, which is how a user opts out.
+    """
+    if row_count is None or threshold <= 0:
+        return False
+    return row_count > threshold
 
 
 @dataclass(frozen=True, slots=True)

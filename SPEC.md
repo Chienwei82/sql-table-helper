@@ -1,4 +1,4 @@
-# SPEC — sql-table-swiss-knife
+# SPEC — sql-table-manager
 
 Status: **Draft v0.1 — awaiting review**
 Companion document: [DESIGN.md](DESIGN.md) (architecture, tech choices, verification report).
@@ -7,7 +7,7 @@ Companion document: [DESIGN.md](DESIGN.md) (architecture, tech choices, verifica
 
 ## 1. Product summary
 
-`sql-table-swiss-knife` is a Python 3.14 terminal (TUI) application for **viewing and editing
+`sql-table-manager` is a Python 3.14 terminal (TUI) application for **viewing and editing
 rows of database tables that have no CRUD UI** — primarily catalog/lookup tables. Two goals:
 
 1. Let the user edit catalog tables **without writing SQL**.
@@ -345,8 +345,8 @@ Each item: question — **recommended default** (my pick if you don't care).
   profile could later expose `driver = "pyodbc" | "mssql-python"` — do you want that option in
   v1? **Default: pyodbc only in v1, seam kept open.**
 - **OQ-2 CLI/package naming?** Package `sql_table_swiss_knife`, console script
-  `sql-table-swiss-knife`. **Default: also add short alias `stsk`.** (Repo folder is currently
-  `sql-table-helper` — rename it? **Default: rename to `sql-table-swiss-knife`.**)
+  `sql-table-manager`. **Default: also add short alias `stm`.** (Repo folder is currently
+  `sql-table-helper` — rename it? **Default: rename to `sql-table-manager`.**)
 - **OQ-3 Models: stdlib dataclasses vs pydantic?** — **Default: stdlib frozen dataclasses**
   (zero deps, fast, mypy-strict-friendly; validation is hand-written where needed). Pydantic
   adds runtime weight and a version churn surface we don't need for internal models. Profiles

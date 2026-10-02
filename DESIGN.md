@@ -1,4 +1,4 @@
-# DESIGN — sql-table-swiss-knife
+# DESIGN — sql-table-manager
 
 Status: **v0.4 — M1–M4 implemented** (see [PROGRESS.md](PROGRESS.md) for live status)
 Companion document: [SPEC.md](SPEC.md) (requirements, milestones, open questions).
@@ -59,7 +59,7 @@ Dependency rules (enforced by review + import-linter in CI):
 ## 3. Folder layout
 
 ```
-sql-table-swiss-knife/
+sql-table-manager/
 ├── SPEC.md / DESIGN.md / README.md / PROGRESS.md   # PROGRESS = milestone status
 ├── pyproject.toml            # uv-managed; metadata, deps, ruff/mypy/pytest config
 ├── uv.lock
@@ -115,7 +115,7 @@ sql-table-swiss-knife/
     └── add-a-database.md     # checklist for new DBMS providers
 ```
 
-Entry point: console script `sql-table-swiss-knife` (short alias `stsk` — OQ-2) →
+Entry point: console script `sql-table-manager` (short alias `stm` — OQ-2) →
 `sql_table_swiss_knife.cli:main`.
 
 ## 4. Domain model
@@ -525,7 +525,7 @@ class SecretStore(Protocol):
     def persistent(self) -> bool: ...  # False → "prompt each session" mode
 ```
 
-- `KeyringSecretStore` — `keyring` package; service name `sql-table-swiss-knife`, account =
+- `KeyringSecretStore` — `keyring` package; service name `sql-table-manager`, account =
   `secret_ref` (profile name + host). Used when `keyring.get_keyring()` is functional
   (backend != fail backend).
 - `EphemeralSecretStore` — in-memory dict for the session when no keyring exists (headless
@@ -770,7 +770,7 @@ Principles:
 
 ```toml
 [project]
-name = "sql-table-swiss-knife"
+name = "sql-table-manager"
 requires-python = ">=3.14"
 dependencies = [
   "textual>=8.2",
@@ -785,8 +785,8 @@ clipboard = ["pyperclip>=1.9"]     # optional system-clipboard read fallback
 mssql-alt = ["mssql-python>=1.15"] # optional alternative driver (future, OQ-1)
 
 [project.scripts]
-sql-table-swiss-knife = "sql_table_swiss_knife.cli:main"
-stsk = "sql_table_swiss_knife.cli:main"
+sql-table-manager = "sql_table_swiss_knife.cli:main"
+stm = "sql_table_swiss_knife.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=9", "pytest-asyncio>=1.4", "pytest-cov>=7",
@@ -812,7 +812,7 @@ rowcount_advisory_above = 50000
 
 ### 13.3 CLI
 
-`sql-table-swiss-knife [--profile NAME] [--read-only] [--debug] [--debug-sql-values]
+`sql-table-manager [--profile NAME] [--read-only] [--debug] [--debug-sql-values]
 [--version]` — no flags launches the Home screen. `--read-only` forces S-9 globally for the
 session (useful when demoing against production).
 
@@ -846,7 +846,7 @@ into `.venv`, never add a `requirements.txt`.
 | add a dev dependency | `uv add --dev <pkg>` |
 | remove a dependency | `uv remove <pkg>` |
 | run something in the env | `uv run <cmd>` (e.g. `uv run pytest`, `uv run mypy`) |
-| run the app | `uv run sql-table-swiss-knife` |
+| run the app | `uv run sql-table-manager` |
 | upgrade the lockfile | `uv lock --upgrade` |
 
 `uv run` works whether or not a venv has been created — it syncs on demand. The

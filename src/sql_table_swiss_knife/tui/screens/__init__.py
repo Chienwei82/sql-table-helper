@@ -16,6 +16,7 @@ from .connections import CONNECTIONS_TITLE, ConnectionsScreen
 from .database_picker import DatabasePickerScreen
 from .help import SAFETY_NOTES, HelpScreen
 from .lookup_picker import LookupPickerScreen
+from .open_prompt import LargeTablePromptScreen
 from .paste_preview import PastePreviewScreen
 from .profile_edit import ProfileEditScreen
 from .quick_filter import QuickFilterScreen
@@ -38,6 +39,7 @@ __all__ = [
     "ConnectionsScreen",
     "DatabasePickerScreen",
     "HelpScreen",
+    "LargeTablePromptScreen",
     "LookupPickerScreen",
     "PastePreviewScreen",
     "PathPromptScreen",

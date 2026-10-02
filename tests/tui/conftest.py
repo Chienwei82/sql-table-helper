@@ -164,6 +164,29 @@ WIDE_NOTES = Table(
     primary_key=PrimaryKey("PK_Notes", ("Id",)),
 )
 
+
+def large_table(*, name: str = "BigOrders", row_count: int = 5000) -> Table:
+    """A small-column table whose *estimate* is over the large-table prompt threshold.
+
+    The point is the listing estimate, not real rows: ``approximate_row_count`` is what
+    the browser gates on, and a fake listing carrying a count of thousands is the only
+    way to drive the prompt without a seeded five-thousand-row database (the app's core
+    promise is that it never needs every row loaded, so the test does not materialize
+    them either).
+    """
+    return Table(
+        schema="sales",
+        name=name,
+        kind=TableKind.BASE_TABLE,
+        columns=(
+            Column("Id", 1, "int", None, 10, 0, False, None, True, is_primary_key=True),
+            Column("Status", 2, "nvarchar", 50, None, None, False, None, False),
+        ),
+        primary_key=PrimaryKey(f"PK_{name}", ("Id",)),
+        approximate_row_count=row_count,
+    )
+
+
 #: A keyless table, to prove the freeze does not grab an arbitrary data column.
 SAMPLE_TABLES: tuple[Table, ...] = (COUNTRY, AUDIT, ORDER, CUSTOMER_VIEW, WIDE_NOTES)
 
@@ -325,6 +348,7 @@ __all__ = [
     "ProfileStore",
     "active_screen",
     "demo_profile",
+    "large_table",
     "make_provider",
     "no_database_profile",
 ]

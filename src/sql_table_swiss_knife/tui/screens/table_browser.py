@@ -13,10 +13,13 @@ from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.widgets import Input, Static, Tree
 
-from ...domain.catalog import TableSummary
-from ...services import SchemaGroup, filter_summaries, group_by_schema
+from ...domain.catalog import Table, TableSummary
+from ...services import SchemaGroup, filter_summaries, group_by_schema, needs_filter_prompt
+from ...services.view import GridView, QuickFilter
 from ..widgets import KeyHint, TableTree
-from .base import AppScreen
+from .base import AppScreen, owning_app
+from .open_prompt import LargeTablePromptScreen
+from .quick_filter import QuickFilterScreen
 from .table_editor import TableEditorScreen
 
 __all__ = ["TABLE_BROWSER_TITLE", "TableBrowserScreen"]
@@ -148,13 +151,70 @@ class TableBrowserScreen(AppScreen):
         self.query_one("#table-tree", TableTree).focus()
 
     def action_open_table(self) -> None:
-        """Open the table under the cursor in the editor screen (FR-2.4)."""
+        """Open the table under the cursor in the editor screen (FR-2.4).
+
+        A table the server estimates to be larger than ``filter_prompt_threshold`` asks
+        the user, once, whether to add a filter first (FR-2.5). The decision is a pure
+        function (:func:`~services.catalog.needs_filter_prompt`), and choosing to filter
+        seeds the editor with that filter so the *first* fetch is already narrowed.
+        """
         tree = self.query_one("#table-tree", TableTree)
         summary = tree.selected_summary()
         if summary is None:
             self.report_warning("select a table first (schema headers are not tables)")
             return
-        self.push(TableEditorScreen(summary))
+        threshold = owning_app(self).settings.filter_prompt_threshold
+        if not needs_filter_prompt(summary.approximate_row_count, threshold=threshold):
+            self.push(TableEditorScreen(summary))
+            return
+        count = summary.approximate_row_count
+        assert count is not None  # needs_filter_prompt returns False for an unknown count
+
+        def answered(choice: bool | None) -> None:
+            """Open directly, or ask for one filter and open with it applied."""
+            if choice is None:  # cancelled — stay in the browser
+                return
+            if choice:
+                self._open_with_filter(summary)
+            else:
+                self.push(TableEditorScreen(summary))
+
+        self.push(
+            LargeTablePromptScreen(str(summary.ref), count, threshold=threshold),
+            answered,
+        )
+
+    def _open_with_filter(self, summary: TableSummary) -> None:
+        """Read the metadata, collect one filter, then open the editor with it applied.
+
+        The metadata fetch is what gives the filter dialog its column list; it is the same
+        cached read the editor would do anyway, so nothing is fetched twice.
+        """
+
+        async def work() -> Table:
+            return await self.services.catalog.get_table(summary.schema, summary.name)
+
+        def ready(table: Table) -> None:
+            """Push the filter dialog once the columns are known."""
+            self.push(
+                QuickFilterScreen(table, self._default_filter_column(table)),
+                lambda quick: self._open_filtered(summary, quick),
+            )
+
+        self.run_task(work, busy_message=f"reading {summary.ref}…", on_result=ready)
+
+    @staticmethod
+    def _default_filter_column(table: Table) -> str:
+        """The column the filter dialog pre-selects: the key, else the first column."""
+        identity = table.identity_columns
+        return identity[0] if identity else table.columns[0].name
+
+    def _open_filtered(self, summary: TableSummary, quick: QuickFilter | None) -> None:
+        """Open the editor, seeded with the chosen filter (or unfiltered, if cleared)."""
+        view = (
+            GridView(filters=(quick,)) if quick is not None and not quick.is_empty else GridView()
+        )
+        self.push(TableEditorScreen(summary, view=view))
 
     def action_escape(self) -> None:
         """Escape leaves the filter first, then the screen (never traps the user)."""

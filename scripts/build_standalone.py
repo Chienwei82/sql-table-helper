@@ -8,7 +8,7 @@ workstation. Run it with::
     uv sync --extra standalone
     uv run python scripts/build_standalone.py
 
-and get ``dist/sql-table-swiss-knife`` (or ``.exe`` on Windows).
+and get ``dist/sql-table-manager`` (or ``.exe`` on Windows).
 
 Two things this script will not pretend to do:
 
@@ -34,11 +34,11 @@ from pathlib import Path
 DIST = Path("dist")
 
 #: The spec file, so repeat builds do not accumulate hidden imports.
-SPEC = Path("build") / "sql-table-swiss-knife.spec"
+SPEC = Path("build") / "sql-table-manager.spec"
 
 #: PyInstaller's own work directory. Removed first so a build never picks up stale
 #: analysis from an older source tree.
-WORK = Path("build") / "sql-table-swiss-knife"
+WORK = Path("build") / "sql-table-manager"
 
 
 def main() -> int:
@@ -47,7 +47,7 @@ def main() -> int:
         print(
             "pyinstaller is not installed.\n"
             "  uv sync --extra standalone\n"
-            "or, outside uv:  pip install 'sql-table-swiss-knife[standalone]'",
+            "or, outside uv:  pip install 'sql-table-manager[standalone]'",
             file=sys.stderr,
         )
         return 1
@@ -64,7 +64,7 @@ def main() -> int:
         # One file, because the point is to copy one artefact onto a machine.
         "--onefile",
         "--name",
-        "sql-table-swiss-knife",
+        "sql-table-manager",
         # A console app: it is a terminal program, and a windowed build on Windows
         # would refuse to print --version.
         "--console",
@@ -88,7 +88,7 @@ def main() -> int:
         print("pyinstaller failed", file=sys.stderr)
         return completed.returncode
 
-    name = "sql-table-swiss-knife.exe" if sys.platform == "win32" else "sql-table-swiss-knife"
+    name = "sql-table-manager.exe" if sys.platform == "win32" else "sql-table-manager"
     binary = root / DIST / name
     if not binary.exists():
         print(f"pyinstaller reported success but {binary} is missing", file=sys.stderr)

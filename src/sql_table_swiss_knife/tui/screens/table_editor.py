@@ -93,54 +93,91 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         width: 46;
     }
     """
+    #: Advanced/occasional actions kept off the footer but reachable from ``ctrl+p``
+    #: (see :attr:`AppScreen.PALETTE_ACTIONS`). The everyday create/read/update keys stay
+    #: visible; everything here is a power feature — the SQL panel and generation, the
+    #: copy scopes/formats, import/export, sort, columns, filter, expand, fetch-more.
+    PALETTE_ACTIONS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "toggle_inspector",
+            "toggle_sql_panel",
+            "sql_mode",
+            "copy_sql",
+            "copy_scope",
+            "copy_format",
+            "import_file",
+            "export_file",
+            "generate_sql",
+            "reload",
+            "fetch_more",
+            "duplicate_row",
+            "redo",
+            "revert_row",
+            "discard_all",
+            "expand_cell",
+            "toggle_columns",
+            "quick_filter",
+            "sort_column",
+        }
+    )
+
+    #: Declaration order is footer/palette order, so the CRUD actions are declared first
+    #: and everything advanced is declared last with ``show=False``. Nothing is removed
+    #: from the keyboard — the advanced keys still fire; they are just not shouted in the
+    #: footer, and ``ctrl+p`` lists them.
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "go_back", "Back to tables", show=True),
-        Binding("f2", "toggle_inspector", "Toggle inspector", show=True),
-        Binding("f3", "toggle_sql_panel", "SQL panel", show=True),
-        Binding("v", "sql_mode", "SQL mode", show=True),
-        Binding("y", "copy_sql", "Copy SQL", show=False),
-        # -- clipboard (FR-4) --
+        # -- create / read / update / delete: the primary, always-visible actions --
+        Binding("enter,f4", "edit_cell", "Edit cell", show=True),
+        Binding("n", "insert_row", "New row", show=True),
+        Binding("delete", "delete_row", "Delete row", show=True),
+        Binding("ctrl+z", "undo", "Undo", show=True),
         Binding("ctrl+c", "copy_data", "Copy", show=True),
-        Binding("b", "copy_scope", "Copy scope", show=False),
-        Binding("p", "copy_format", "Copy format", show=False),
         Binding("ctrl+v", "paste", "Paste", show=True),
-        Binding("i", "import_file", "Import file", show=False),
-        Binding("o", "export_file", "Export file", show=False),
+        # The commit step is the one write path (FR-7.6); it leads the footer and the
+        # palette. The safety gate and confirmation dialog behind it are unchanged.
+        Binding("ctrl+s", "apply", "Commit changes", show=True),
         # -- selection (rectangular, for copy and for fill) --
         Binding("shift+up", "select_up", "Extend", show=False, priority=True),
         Binding("shift+down", "select_down", "Extend", show=False, priority=True),
         Binding("shift+left", "select_left", "Extend", show=False, priority=True),
         Binding("shift+right", "select_right", "Extend", show=False, priority=True),
         Binding("ctrl+escape", "clear_selection", "Clear selection", show=False, priority=True),
-        Binding("g", "generate_sql", "Generate SQL for", show=True),
-        Binding("r", "reload", "Reload", show=True),
+        # -- advanced: off the footer, enumerated by the command palette --
+        Binding("f2", "toggle_inspector", "Toggle inspector", show=False),
+        Binding("f3", "toggle_sql_panel", "SQL panel", show=False),
+        Binding("v", "sql_mode", "SQL mode", show=False),
+        Binding("y", "copy_sql", "Copy SQL", show=False),
+        Binding("b", "copy_scope", "Copy scope", show=False),
+        Binding("p", "copy_format", "Copy format", show=False),
+        Binding("i", "import_file", "Import file", show=False),
+        Binding("o", "export_file", "Export file", show=False),
+        Binding("g", "generate_sql", "Generate SQL for", show=False),
+        Binding("r", "reload", "Reload", show=False),
         Binding("m", "fetch_more", "Fetch more", show=False),
-        # -- editing (M5) --
-        Binding("enter,f4", "edit_cell", "Edit cell", show=True),
-        Binding("ctrl+n", "insert_row", "New row", show=True),
-        Binding("ctrl+d", "duplicate_row", "Duplicate", show=True),
-        Binding("delete", "delete_row", "Delete", show=True),
-        Binding("ctrl+z", "undo", "Undo", show=True),
+        Binding("ctrl+d", "duplicate_row", "Duplicate", show=False),
         Binding("ctrl+shift+z", "redo", "Redo", show=False),
-        Binding("ctrl+u", "revert_row", "Revert row", show=True),
-        Binding("ctrl+shift+u", "discard_all", "Discard all", show=True),
-        Binding("ctrl+s", "apply", "Apply", show=True),
-        # -- view (FR-3.2/3.3) --
-        # M8: the expand view for long text and binary cells (FR-3.1).
-        Binding("w", "expand_cell", "Expand cell", show=True),
-        Binding("c", "toggle_columns", "Columns", show=True),
-        Binding("f", "quick_filter", "Filter", show=True),
-        Binding("s", "sort_column", "Sort", show=True),
+        Binding("ctrl+u", "revert_row", "Revert row", show=False),
+        Binding("ctrl+shift+u", "discard_all", "Discard all", show=False),
+        Binding("w", "expand_cell", "Expand cell", show=False),
+        Binding("c", "toggle_columns", "Columns", show=False),
+        Binding("f", "quick_filter", "Filter", show=False),
+        Binding("s", "sort_column", "Sort", show=False),
     ]
 
-    def __init__(self, summary: TableSummary, **kwargs: object) -> None:
+    def __init__(
+        self, summary: TableSummary, *, view: GridView | None = None, **kwargs: object
+    ) -> None:
         super().__init__(**kwargs)
         self._summary = summary
         self._table: Table | None = None
         self._window: RowWindow | None = None
         self._inspector = InspectorService()
         self._inspector_collapsed = False
-        self._view = GridView()
+        #: The starting sort/filter/visibility. A filter supplied here is applied to the
+        #: *first* fetch, so a table opened through the large-table prompt never loads
+        #: unfiltered and then reloads — the point of asking first.
+        self._view = view if view is not None else GridView()
         self._changes: ChangeService | None = None
         #: Server-generated keys of the most recent Apply, so the grid can re-key rows.
         self._applied_keys: tuple[RowKey, ...] = ()
@@ -382,10 +419,12 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         banner.add_class("-shown")
 
     def _refresh_pending(self) -> None:
-        """The pending-changes strip: ``N inserts, M updates, K deletes`` (FR-7.2).
+        """The commit bar: ``staged: N inserts, M updates, K deletes`` (FR-7.2).
 
-        Also refreshes the SQL panel, so the preview and the strip can never disagree about
-        how much is staged (FR-7.2 + FR-5.1).
+        It reads as an affirmation that nothing is written yet, with the one key that
+        writes (``ctrl+s``) spelled out — the "edit first, commit later" promise made
+        visible right where the staged work is. Also refreshes the SQL panel, so the
+        preview and the bar can never disagree about how much is staged (FR-7.2, FR-5.1).
         """
         strip = self.query_one("#editor-pending", Static)
         changes = self._changes
@@ -397,9 +436,9 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
             return
         counts = changes.counts
         strip.update(
-            f"pending: {changes.summary}"
+            f"staged: {changes.summary} — nothing written yet"
+            f"  ·  ctrl+s to commit"
             f"  ·  {self._view.sort_label()}  ·  {self._view.filter_label()}"
-            "  ·  ctrl+s to apply"
         )
         strip.add_class("-shown")
         strip.set_class(counts[ChangeKind.DELETE] > 0, "-dirty")
@@ -1057,7 +1096,7 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
             self.report_warning(verdict.message, title="Apply blocked")
             return
         self.push(
-            ApplyConfirmScreen(verdict, title=f"Apply to {table.ref if table else ''}"),
+            ApplyConfirmScreen(verdict, title=f"Commit changes to {table.ref if table else ''}"),
             self._on_apply_confirmed,
         )
 
@@ -1189,30 +1228,27 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
     # -- hints & chrome -----------------------------------------------------
 
     def hints_for(self) -> tuple[KeyHint, ...]:
+        """CRUD-first hints: the create/read/update/commit keys, then status context.
+
+        The advanced actions (SQL panel, generate, import/export, columns, sort) are not
+        listed here — they live in the command palette, which the trailing ``^p`` hint
+        advertises. The footer teaches the everyday path; ``ctrl+p`` reaches the rest.
+        """
         changes = self._changes
         table = self._table
         writable = table is not None and self.services.safety.check_table(table).allowed
-        hints = [
-            KeyHint("f2", "show inspector" if self._inspector_collapsed else "hide inspector"),
-            KeyHint(
-                "f3",
-                f"hide sql ({self._sql_mode.label})" if self._sql_open else "show sql",
-            ),
-        ]
-        if self._sql_open:
-            hints.append(KeyHint("v", f"sql mode: {self._sql_mode.label}"))
-        hints.append(KeyHint("g", "generate sql"))
-        if self._focused_cell_is_expandable():
-            hints.append(KeyHint("w", "expand cell"))
-        hints.append(KeyHint("^c", f"copy {self._selection_label()} ({self._copy_format})"))
+        hints: list[KeyHint] = [KeyHint("enter", "edit cell")]
         if writable:
             hints.extend(
                 (
-                    KeyHint("enter", "edit cell"),
+                    KeyHint("n", "new row"),
+                    KeyHint("del", "delete row"),
+                    KeyHint("^z", "undo"),
                     KeyHint("^v", "paste"),
-                    KeyHint("^s", f"apply ({changes.summary if changes else 'nothing'})"),
+                    KeyHint("^s", f"commit ({changes.summary if changes else 'nothing'})"),
                 )
             )
+        hints.append(KeyHint("^c", f"copy {self._selection_label()}"))
         if self.is_read_only:
             hints.append(KeyHint("f5", "allow writes"))
         if self._view.is_filtered:
@@ -1222,7 +1258,7 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         else:
             hints.append(KeyHint("r", "reload"))
         hints.append(KeyHint("esc", "back to tables"))
-        hints.append(KeyHint("^p", "commands"))
+        hints.append(KeyHint("^p", "more…"))
         return tuple(hints)
 
     def _screen_title(self) -> str:

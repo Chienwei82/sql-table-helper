@@ -879,7 +879,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sql-table-swiss-knife"
+name = "sql-table-manager"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },

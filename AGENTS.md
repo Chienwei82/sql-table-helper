@@ -6,7 +6,7 @@ Instructions for AI coding agents (and humans) working in this repository.
 an import that "looks harmless" will fail the build. The rules below are not stylistic
 preferences — breaking one breaks `lint-imports`, `mypy` or a test.
 
-- Project: `sql-table-swiss-knife` (distribution) / `sql_table_swiss_knife` (import
+- Project: `sql-table-manager` (distribution) / `sql_table_swiss_knife` (import
   package), in a repo directory named `sql-table-helper`. **Import with the underscore
   name**, always.
 - Human-facing docs: [README.md](README.md). Requirements: [SPEC.md](SPEC.md). Design

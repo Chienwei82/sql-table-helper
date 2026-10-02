@@ -127,7 +127,7 @@ async def test_confirming_the_preview_stages_the_paste(
         await _settle(pilot)
 
         assert "1 update" in _changes(screen).summary
-        assert _pending(app).startswith("pending: 1 update")
+        assert _pending(app).startswith("staged: 1 update")
 
 
 async def test_cancelling_the_preview_stages_nothing(
