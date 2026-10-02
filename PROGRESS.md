@@ -587,6 +587,13 @@ tz-aware datetimes, and `datetime`-vs-`date` isinstance ordering.
 
 ## Known gaps left behind
 
+> **Closed (2026-10-02).** Applied statements now remain visible as "ran (success)" with
+> timing (FR-5.5). `AppliedRun` in `services/sqlpreview.py` carries the *same* `SqlEntry`
+> objects the panel showed before the run — captured while the staging area still existed,
+> the same way the audit record is — plus the `identity_insert` flag, which the empty
+> staging area could no longer answer afterwards. Pending changes still take priority; the
+> run reappears when staging is empty again.
+
 - **No snapshot for the panel.** The SVG snapshot set was already out of sync with the tests
   before this milestone (9 mismatches that the plugin reports without failing), and
   regenerating it churned six unrelated files, so I left it alone and relied on the Pilot

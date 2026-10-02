@@ -17,6 +17,7 @@ from ...services.data import DataService, RowWindow, status_text
 from ...services.inspector import InspectorService, Severity, Warning, fks_for, read_only_reason
 from ...services.lookup import LookupChoice
 from ...services.sqlpreview import (
+    AppliedRun,
     RowAction,
     SqlMode,
     SqlPreview,
@@ -200,6 +201,10 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         self._sql_mode = SqlMode.SCRIPT
         self._sql_open = False
         self._sql_generated: tuple[str, str] | None = None
+        #: The last successful Apply's statements, kept for the panel once staging clears
+        #: (FR-5.5). Captured before each run, exactly like the audit record — the panel
+        #: must show what ran, and after the run the staging area can no longer say that.
+        self._applied_run: AppliedRun | None = None
         #: Set while a dropped connection is awaiting the user's reconnect decision.
         self._connection_lost: bool = False
 
@@ -873,12 +878,16 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
 
         Built on demand rather than cached, so the panel can never show SQL for changes
         that are no longer staged: every re-render derives it from the ``ChangeSet``.
+        The last successful Apply rides along so the panel can show what ran once
+        nothing is staged anymore (FR-5.5).
         """
         table = self._table
         changes = self._changes
         dialect = self.connection.provider().dialect
         if table is None:
-            return SqlPreview(table=None, dialect=dialect, mode=self._sql_mode)
+            return SqlPreview(
+                table=None, dialect=dialect, mode=self._sql_mode, applied=self._applied_run
+            )
         entries = (
             entries_for(
                 dialect,
@@ -895,6 +904,7 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
             entries=entries,
             mode=self._sql_mode,
             identity_insert=changes is not None and changes.requires_identity_insert(),
+            applied=self._applied_run,
         )
         if self._sql_generated is not None:
             sql, title = self._sql_generated
@@ -1122,6 +1132,7 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         # the record of what was *attempted*, which matters when the Apply fails.
         counts = dict(changes.counts)
         statements = self._audit_statements(changes)
+        staged = self._staged_preview()
 
         async def work() -> None:
             try:
@@ -1142,12 +1153,23 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
             if generation != self.generation:
                 return
             self._applied_keys = result.inserted_keys
+            # The staged entries were read before the run; now that it committed they
+            # become the panel's "what ran" until the next staging action (FR-5.5).
+            if staged is not None and staged.entries:
+                self._applied_run = AppliedRun(
+                    entries=staged.entries,
+                    duration_ms=result.duration_ms,
+                    identity_insert=staged.identity_insert,
+                )
             self._write_audit(counts, statements, "committed", result.duration_ms, None)
             self._after_apply(result.statement_count, result.duration_ms)
 
         self.run_worker(work(), name="apply", group=self.WORKER_GROUP, exit_on_error=False)
 
     def _after_apply(self, statements: int, duration_ms: int) -> None:
+        # A generated statement is a snapshot of one moment; the staging area has just
+        # been cleared, so keeping it on screen would hide what actually ran (FR-5.5).
+        self._sql_generated = None
         self.load_metadata()
         self.notify(
             f"applied {statements} statement(s) in {duration_ms} ms",
@@ -1157,6 +1179,20 @@ class TableEditorScreen(ClipboardMixin, AppScreen):
         )
 
     # -- audit (M8) ----------------------------------------------------------
+
+    def _staged_preview(self) -> SqlPreview | None:
+        """The panel's view of the staging area *before* Apply runs, or None on failure.
+
+        Read at the same moment as the audit record (FR-5.5): a successful Apply clears
+        the staging area, so this is the only chance to capture the statement objects
+        the panel showed — what the user confirmed is what the panel later reports as
+        having run (FR-5.4). A failure yields None rather than blocking the Apply: the
+        record of a write must never be able to stop the write.
+        """
+        try:
+            return self.build_preview()
+        except Exception:
+            return None
 
     def _audit_statements(self, changes: ChangeService) -> tuple[str, ...]:
         """The literal SQL of the pending Apply, for the audit record.

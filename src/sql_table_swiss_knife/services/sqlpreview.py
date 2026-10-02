@@ -51,6 +51,7 @@ from ..providers import (
 __all__ = [
     "EMPTY_HINT",
     "PREVIEW_ONLY_NOTE",
+    "AppliedRun",
     "RowAction",
     "SqlEntry",
     "SqlMode",
@@ -282,6 +283,35 @@ def generate_for(
 
 
 @dataclass(frozen=True, slots=True)
+class AppliedRun:
+    """What one successful Apply executed, kept for the panel after staging clears (FR-5.5).
+
+    The entries are the *same* :class:`SqlEntry` objects the panel showed as pending
+    before the Apply — captured while the staging area still existed — so what the panel
+    shows afterwards is literally the SQL that ran, not a re-derivation (FR-5.4). The
+    ``identity_insert`` flag is carried alongside for the same reason: after the run the
+    staging area can no longer answer whether the script needed ``SET IDENTITY_INSERT``,
+    but the script rendering still has to be the one that ran.
+    """
+
+    entries: tuple[SqlEntry, ...]
+    duration_ms: int
+    identity_insert: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.entries:
+            raise ValueError("an AppliedRun with no statements never ran anything")
+        if self.duration_ms < 0:
+            raise ValueError("duration_ms must be >= 0")
+
+    @property
+    def summary(self) -> str:
+        """``ran (success) · 3 statements · 42 ms`` — FR-5.5's wording for the panel header."""
+        noun = "statement" if len(self.entries) == 1 else "statements"
+        return f"ran (success) · {len(self.entries)} {noun} · {self.duration_ms} ms"
+
+
+@dataclass(frozen=True, slots=True)
 class SqlPreview:
     """Everything the SQL panel renders, in every mode (FR-5).
 
@@ -289,6 +319,10 @@ class SqlPreview:
     panel calls :meth:`body` to get the text for the current mode and :meth:`script` for the
     combined transaction script, so "what the user copies" is decided here rather than in
     the widget — a widget bug cannot then produce a copy that differs from what is shown.
+
+    Priority when several sources have something to show: a generated statement (the user
+    asked for one explicitly), then pending changes (the plan for what runs next), then
+    the last successful Apply (FR-5.5), then the empty hint.
     """
 
     #: ``None`` before the table metadata has loaded; the panel then shows nothing at all.
@@ -300,10 +334,39 @@ class SqlPreview:
     #: Free-form statement shown instead of the entries (the "generate SQL for…" actions).
     generated: str | None = None
     generated_title: str | None = None
+    #: The last successful Apply, shown once nothing is pending anymore (FR-5.5).
+    applied: AppliedRun | None = None
 
     @property
     def is_empty(self) -> bool:
-        return not self.entries and not self.generated
+        return not self.entries and not self.generated and self.applied is None
+
+    @property
+    def display_entries(self) -> tuple[SqlEntry, ...]:
+        """The entries the statement list and the body render.
+
+        Pending changes win over the last Apply's: while something is staged the panel
+        owes the user the plan for what runs *next* (FR-7.2). The applied run reappears
+        when the pending work is applied, reverted or discarded — and stays truthful the
+        whole time, because it describes the last thing that actually ran.
+        """
+        if self.entries:
+            return self.entries
+        if self.applied is not None:
+            return self.applied.entries
+        return ()
+
+    @property
+    def showing_applied(self) -> bool:
+        """True when the panel shows the last Apply rather than pending work (FR-5.5)."""
+        return not self.entries and self.generated is None and self.applied is not None
+
+    @property
+    def _shown_identity_insert(self) -> bool:
+        """The ``identity_insert`` flag matching :attr:`display_entries`."""
+        if not self.entries and self.applied is not None:
+            return self.applied.identity_insert
+        return self.identity_insert
 
     def with_mode(self, mode: SqlMode) -> SqlPreview:
         """The same preview in another rendering (immutable, so the panel can hold both)."""
@@ -323,40 +386,51 @@ class SqlPreview:
             return EMPTY_HINT
         if self.mode is SqlMode.SCRIPT:
             return self.script()
-        return "\n\n".join(entry.text(self.mode) for entry in self.entries)
+        return "\n\n".join(entry.text(self.mode) for entry in self.display_entries)
 
     def script(self) -> str:
         """The whole change set as one transaction script (FR-5.3).
 
         Falls back to the generated statement when the panel is showing one, so "copy
-        script" always copies the thing the user is looking at.
+        script" always copies the thing the user is looking at. While the last Apply is
+        shown it wraps *that* run's statements — with the ``identity_insert`` flag the
+        run recorded, so the copyable script is the script that executed.
         """
         if self.generated is not None:
             return self.generated
         return build_script(
             self.dialect,
             self.table,
-            [entry.statement for entry in self.entries],
-            identity_insert=self.identity_insert,
+            [entry.statement for entry in self.display_entries],
+            identity_insert=self._shown_identity_insert,
         )
 
     def parameters(self) -> str:
         """The parameter legend for the current mode (empty unless parameterized)."""
         if self.mode is not SqlMode.PARAMETERIZED or self.generated is not None:
             return ""
-        return "\n\n".join(entry.parameter_legend() for entry in self.entries if entry.params)
+        return "\n\n".join(
+            entry.parameter_legend() for entry in self.display_entries if entry.params
+        )
 
     def entry(self, index: int) -> SqlEntry | None:
         """The entry at the 1-based ``index`` shown in the statement list."""
-        if 1 <= index <= len(self.entries):
-            return self.entries[index - 1]
+        entries = self.display_entries
+        if 1 <= index <= len(entries):
+            return entries[index - 1]
         return None
 
     def summary(self) -> str:
-        """``3 statements · 1 insert, 1 update, 1 delete`` for the panel header (FR-7.2)."""
+        """``3 statements · 1 insert, 1 update, 1 delete`` for the panel header (FR-7.2).
+
+        With nothing pending but a completed run, the header instead states what ran and
+        how long it took — FR-5.5's ``ran (success)`` wording.
+        """
         if self.generated is not None:
             return self.generated_title or "generated statement"
         if not self.entries:
+            if self.applied is not None:
+                return self.applied.summary
             return "nothing staged"
         counts = dict.fromkeys(ChangeKind, 0)
         for entry in self.entries:
