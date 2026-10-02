@@ -6,7 +6,7 @@ Instructions for AI coding agents (and humans) working in this repository.
 an import that "looks harmless" will fail the build. The rules below are not stylistic
 preferences — breaking one breaks `lint-imports`, `mypy` or a test.
 
-- Project: `sql-table-swiss-knife` (distribution) / `sql_table_swiss_knife` (import
+- Project: `sql-table-manager` (distribution) / `sql_table_swiss_knife` (import
   package), in a repo directory named `sql-table-helper`. **Import with the underscore
   name**, always.
 - Human-facing docs: [README.md](README.md). Requirements: [SPEC.md](SPEC.md). Design
@@ -143,6 +143,22 @@ appearance deliberately, regenerate with `pytest --snapshot-update` and eyeball 
   the line. Do not paper over an untested path — say it is untested.
 - Line length 100. `ruff` rules `E,F,W,I,UP,B,C4,SIM,RUF`. `mypy` is **strict over `src`
   *and* `tests`** — tests are typed like production code.
+
+## The memory bank is a local mechanism — it is not versioned
+
+`memory-bank/` is [Cline's Memory Bank](https://docs.cline.bot/best-practices/memory-bank):
+structured markdown that carries session-to-session context for whichever agent is
+working on **this checkout**. It is a local convenience, not project documentation:
+
+- It is in `.gitignore` (along with `.clinerules/`) and is **never committed, pushed, or
+  reviewed in a PR**. Do not `git add -f` it.
+- Its contents may differ — or the directory may not exist at all — in another clone, and
+  that is expected. Never rely on it as the only record of a decision or a limitation.
+- Anything that must be shared belongs in a committed doc instead: `README.md`,
+  `PROGRESS.md`, `docs/`, or this file. Those are the shared source of truth; the memory
+  bank only points the next local session at them.
+- When you finish significant work, update it locally ("update memory bank": review all
+  files) and commit the *real* docs in the same round.
 
 ## Before you commit
 

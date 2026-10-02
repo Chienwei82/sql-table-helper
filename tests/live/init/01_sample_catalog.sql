@@ -1,4 +1,4 @@
--- Sample catalog-like database for sql-table-swiss-knife (M1 test fixture).
+-- Sample catalog-like database for sql-table-manager (M1 test fixture).
 -- Loaded by tests/live/docker-compose.yml via sqlcmd. Idempotent: safe to re-run.
 --
 -- Coverage: identity PK · composite PK · FKs · self-referencing FK · computed column ·

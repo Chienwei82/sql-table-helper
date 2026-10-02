@@ -70,6 +70,12 @@ def test_find_returns_the_documentation() -> None:
     assert doc is not None and doc.action == ActionId.APPLY
 
 
+def test_the_insert_row_action_is_documented_as_its_new_key() -> None:
+    """The CRUD-first editor stages a row with plain ``n``; the registry must agree."""
+    doc = find(ActionId.INSERT_ROW)
+    assert doc is not None and "n" in doc.keys
+
+
 def test_find_returns_none_for_an_unknown_action() -> None:
     assert find("no_such_action") is None
 

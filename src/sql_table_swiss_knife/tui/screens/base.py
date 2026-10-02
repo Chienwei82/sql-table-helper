@@ -65,6 +65,13 @@ class AppScreen(Screen[None]):
     #: Worker group name; workers with the same group are exclusive per screen.
     WORKER_GROUP: ClassVar[str] = "db"
 
+    #: Actions a screen keeps out of the footer (``show=False``) but still wants the
+    #: command palette to offer. The footer is a curation — a screen that lists thirty
+    #: keys teaches none of them — but hiding an action from the footer must never make
+    #: it unreachable, so anything listed here is enumerated by ``ctrl+p``. Screens add
+    #: their occasional/advanced actions here and keep the common CRUD keys visible.
+    PALETTE_ACTIONS: ClassVar[frozenset[str]] = frozenset()
+
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
         self._generation = 0
@@ -141,13 +148,16 @@ class AppScreen(Screen[None]):
 
         Generating them from ``BINDINGS`` means the palette, the footer and the
         keyboard can never disagree about what a screen offers: adding a binding is
-        enough to make the action discoverable.
+        enough to make the action discoverable. A binding hidden from the footer
+        (``show=False``) is still enumerated when its action is listed in
+        :attr:`PALETTE_ACTIONS`, so curating the footer never strands an action.
         """
         actions: list[ScreenCommand] = []
         seen: set[str] = set()
         for key, binding in self._bindings:
             name = binding.description or binding.action.replace("_", " ")
-            if not binding.show or binding.action in seen:
+            palette_only = binding.action in self.PALETTE_ACTIONS
+            if binding.action in seen or not (binding.show or palette_only):
                 continue
             seen.add(binding.action)
             actions.append(

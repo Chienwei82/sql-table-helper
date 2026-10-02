@@ -3,10 +3,17 @@
 from textual.app import App
 from textual.widgets import Input
 
+from sql_table_swiss_knife.domain import Table
 from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import TableBrowserScreen, TableEditorScreen
+from sql_table_swiss_knife.tui.screens import (
+    LargeTablePromptScreen,
+    QuickFilterScreen,
+    TableBrowserScreen,
+    TableEditorScreen,
+)
 from sql_table_swiss_knife.tui.widgets import DataGrid, InspectorPanel, TableTree
-from tests.tui.conftest import AUDIT, SAMPLE_TABLES, AppFactory, active_screen
+from tests.fakes import FakeProvider
+from tests.tui.conftest import AUDIT, SAMPLE_TABLES, AppFactory, active_screen, large_table
 
 
 async def _connected(app: App[None], pilot: object) -> None:
@@ -211,3 +218,93 @@ async def test_browser_without_a_connection_offers_a_way_back(
         await pilot.pause()
         assert "Not connected" in str(app.screen.query_one("#table-empty").render())
         assert active_screen(app, TableBrowserScreen).status.level == "error"
+
+
+# -- the large-table prompt (FR-2.5) ------------------------------------------
+
+
+def _big(name: str = "BigOrders", row_count: int = 5000) -> Table:
+    """A listing entry whose estimate is well over the prompt threshold."""
+    return large_table(name=name, row_count=row_count)
+
+
+async def test_a_small_table_opens_directly_without_a_prompt(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """FR-2.5: the prompt is a large-table courtesy — a 5-row table never sees it."""
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        await _connected(app, pilot)
+        await pilot.press("enter")  # AUDIT is the first row, five estimated rows
+        for _ in range(4):
+            await pilot.pause()
+        editor = active_screen(app, TableEditorScreen)
+        assert not editor.view.is_filtered  # opened directly, no filter seeded
+
+
+async def test_a_large_table_offers_a_filter_before_opening(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """FR-2.5: opening a table estimated above the threshold asks first, and names why."""
+    big = _big()
+    app = app_factory(profiles=seeded_profiles, provider=FakeProvider((big,)))
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        await _connected(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = active_screen(app, LargeTablePromptScreen)
+        body = str(screen.query_one("#open-prompt-message").render())
+        assert "5,000" in body  # the estimate that triggered the prompt
+        assert "Open all rows" in str(screen.query_one("#open-all").render())
+
+
+async def test_the_prompt_can_open_the_whole_table(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """The prompt is a courtesy, never a gate: "open all" opens the full table."""
+    big = _big()
+    app = app_factory(profiles=seeded_profiles, provider=FakeProvider((big,)))
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        await _connected(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, LargeTablePromptScreen)
+        await pilot.press("a")  # "Open all rows"
+        for _ in range(4):
+            await pilot.pause()
+        editor = active_screen(app, TableEditorScreen)
+        assert not editor.view.is_filtered  # the full table, exactly as asked
+
+
+async def test_the_prompt_applies_the_filter_before_the_grid_loads(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """The chosen filter seeds the editor, so the *first* fetch is already narrowed.
+
+    This is the whole point of asking *before* opening: the grid never loads the
+    five thousand rows only to reload with the filter afterwards.
+    """
+    big = _big()
+    app = app_factory(profiles=seeded_profiles, provider=FakeProvider((big,)))
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        await _connected(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, LargeTablePromptScreen)
+        await pilot.press("f")  # "Add a filter…"
+        for _ in range(4):
+            await pilot.pause()
+        dialog = active_screen(app, QuickFilterScreen)
+        dialog.query_one("#filter-term", Input).value = "shipped"
+        # The term input submits → apply; the pauses let the modal dismiss and the
+        # editor workers (metadata + first filtered fetch) finish.
+        await pilot.press("enter")
+        for _ in range(6):
+            await pilot.pause()
+        editor = active_screen(app, TableEditorScreen)
+        assert editor.view.is_filtered  # the editor opened with the filter seeded
+        assert "shipped" in editor.view.filter_label()

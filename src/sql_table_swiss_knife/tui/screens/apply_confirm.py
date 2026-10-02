@@ -93,11 +93,11 @@ class ApplyConfirmScreen(ModalScreen[bool]):
         # Both accelerators route through ``try_confirm``, which re-checks the typed
         # word: binding them straight to a confirming action would let ``y`` bypass the
         # production prompt, which is precisely the hole the prompt exists to close.
-        Binding("y", "try_confirm", "Apply", show=True),
+        Binding("y", "try_confirm", "Commit", show=True),
         Binding("enter", "try_confirm", "Apply", show=False),
     ]
 
-    def __init__(self, verdict: ApplyVerdict, *, title: str = "Apply staged changes") -> None:
+    def __init__(self, verdict: ApplyVerdict, *, title: str = "Commit staged changes") -> None:
         super().__init__()
         self._verdict = verdict
         self._title = title
@@ -187,11 +187,11 @@ class ApplyConfirmScreen(ModalScreen[bool]):
         if self._verdict.confirmation.required:
             word = self._verdict.confirmation.word
             return f"Type {word}"
-        return "Apply now"
+        return "Commit now"
 
     def _refresh_button(self) -> None:
         """Enable the confirm button only once the requirements are met."""
         met = self._requirements_met()
         button = self.query_one("#confirm", Button)
         button.disabled = not met
-        button.label = "Apply now" if met else self._button_label()
+        button.label = "Commit now" if met else self._button_label()

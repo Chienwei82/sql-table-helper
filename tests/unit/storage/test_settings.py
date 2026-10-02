@@ -120,3 +120,26 @@ def test_allow_keyless_writes_rejects_a_non_boolean(tmp_path: Path) -> None:
     path.write_text('allow_keyless_writes = "yes"\n', encoding="utf-8")
     with pytest.raises(SettingsError, match="expected a boolean"):
         SettingsStore(path).load()
+
+
+def test_filter_prompt_threshold_defaults_to_one_hundred() -> None:
+    """The large-table prompt fires above 100 rows unless the user says otherwise."""
+    assert Settings().filter_prompt_threshold == 100
+
+
+def test_filter_prompt_threshold_is_read_from_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.toml"
+    path.write_text("filter_prompt_threshold = 5000\n", encoding="utf-8")
+    assert SettingsStore(path).load().filter_prompt_threshold == 5000
+
+
+def test_filter_prompt_threshold_may_be_zero_to_opt_out(tmp_path: Path) -> None:
+    """0 is the documented "never ask" value, so it must be accepted, not rejected."""
+    path = tmp_path / "settings.toml"
+    path.write_text("filter_prompt_threshold = 0\n", encoding="utf-8")
+    assert SettingsStore(path).load().filter_prompt_threshold == 0
+
+
+def test_filter_prompt_threshold_rejects_a_negative_value() -> None:
+    with pytest.raises(SettingsError, match="filter_prompt_threshold"):
+        Settings(filter_prompt_threshold=-1)

@@ -1,4 +1,4 @@
-# sql-table-swiss-knife
+# sql-table-manager
 
 **Edit catalog tables without writing SQL — and always see the SQL it runs.**
 
@@ -27,14 +27,14 @@ deliberately the small thing.
 
 ### What it does
 
-- **Edits are staged, never immediate.** Nothing reaches the database until you Apply, and
-  Apply runs everything in one transaction — all of it, or none of it.
+- **Edits are staged, never immediate.** Nothing reaches the database until you
+  commit, and committing runs everything in one transaction — all of it, or none of it.
 - **The SQL is always on screen** (`F3`), both as sent and as a copy-ready literal script.
   This is the point of the tool: you don't have to *write* SQL, but you can always *read*
   it — and copy the script for a DBA to run out-of-band.
 - **Safe by default.** Read-only is on by default for production profiles; a red `PROD`
-  badge in the header; the Apply dialog states the counts and the affected tables and
-  demands a typed word against production; every Apply — committed, rolled back or
+  badge in the header; the commit dialog states the counts and the affected tables and
+  demands a typed word against production; every commit — confirmed, rolled back or
   refused — is recorded in a local audit log.
 - **It refuses rather than guesses.** A table with no primary key is read-only, because an
   `UPDATE` without a key is `WHERE 1=1` by accident.
@@ -63,12 +63,17 @@ from the code without a test failing.
 ![Connection profiles](docs/screenshots/connections_screen_with_profiles.svg)
 
 **Table browser** — schema tree with the glyph badges: `🔑` primary key, `🔗` foreign
-keys, `⚡` triggers, `⚠` **no** primary key (read-only), `👁` view.
+keys, `⚡` triggers, `⚠` **no** primary key (read-only), `👁` view. A table estimated
+above 100 rows asks whether to add a filter before it opens.
 
 ![Table browser](docs/screenshots/table_browser.svg)
 
 **The workspace** — data grid, inspector and (with `F3`) the SQL panel. Note the
-frozen key column and the column badges: type, `🔒` read-only, `✱` updated, `∅` nullable.
+frozen key column and the column badges: type, `🔒` read-only, `✱` updated, `∅`
+nullable. The footer teaches the everyday path — edit, new row, delete, undo,
+copy/paste, `ctrl+s` to commit — and the commit bar above the grid states what is
+staged and that nothing is written yet. Everything else (SQL panel, generate,
+import/export, columns, sort, filter) lives in the command palette (`ctrl+p`).
 
 ![Table workspace](docs/screenshots/table_editor_split_view.svg)
 
@@ -76,10 +81,10 @@ frozen key column and the column badges: type, `🔒` read-only, `✱` updated, 
 
 ![Wide table with frozen key](docs/screenshots/wide_table_frozen_key.svg)
 
-**Apply against production** — red border, the counts, the affected tables, the
+**Commit against production** — red border, the counts, the affected tables, the
 transaction guarantee, and a word that must be typed.
 
-![Production Apply confirmation](docs/screenshots/apply_confirmation_production.svg)
+![Production commit confirmation](docs/screenshots/apply_confirmation_production.svg)
 
 **Cell expand view** — a long text cell in full, hard-wrapped and read-only.
 
@@ -103,7 +108,7 @@ transaction guarantee, and a word that must be typed.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-swiss-knife
+uv run sql-table-manager
 ```
 
 Requires Python 3.14. To connect you also need an **ODBC driver manager** and the
@@ -114,7 +119,7 @@ private CA fails `uv sync` in a way `pip` would not. See
 [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md), and the `uv pip` route below.
 
 > The package is **not published on PyPI yet**, so the `uv tool install
-> sql-table-swiss-knife` line that used to sit here does not work. Install from a
+> sql-table-manager` line that used to sit here does not work. Install from a
 > checkout, or build a wheel with `uv build` and install the result.
 
 ### Installing with `uv pip` instead of `uv sync`
@@ -128,7 +133,7 @@ source .venv/bin/activate                # Windows: .venv\Scripts\activate
 uv pip install -e .                      # runtime only
 uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
 uv pip install -e ".[clipboard]"         # + the better clipboard backend
-sql-table-swiss-knife                    # or the short alias: stsk
+sql-table-manager                      # or the short alias: stm
 ```
 
 Two things to know, both of which will bite you otherwise:
@@ -151,7 +156,7 @@ A **single-file** build is also supported for locked-down machines and for dropp
 app onto a server without touching its Python:
 
 ```bash
-uv run scripts/build_standalone.py        # writes dist/sql-table-swiss-knife (one file)
+uv run scripts/build_standalone.py        # writes dist/sql-table-manager (one file)
 ```
 
 It uses [PyInstaller](https://pyinstaller.org) (declared as the optional `standalone`
@@ -167,8 +172,8 @@ uv run pytest -m live       # integration tests (need the docker server, see bel
 uv run ruff check .         # lint
 uv run ruff format --check .  # format check
 uv run mypy                 # strict type check
-uv run sql-table-swiss-knife --version
-uv run sql-table-swiss-knife   # launch the TUI (quit: ctrl+q)
+uv run sql-table-manager --version
+uv run sql-table-manager   # launch the TUI (quit: ctrl+q)
 ```
 
 ## Using the TUI
@@ -181,28 +186,32 @@ uv run sql-table-swiss-knife   # launch the TUI (quit: ctrl+q)
 | `b` | connections | switch database on the live session |
 | `/` | tables | search-as-you-type over `schema.table` |
 | `f6` | tables | collapse/expand the schema groups |
-| `enter` | tables | open the selected table (grid + inspector) |
-| `f2` | table | show/hide the inspector panel |
-| `f3` | table | show/hide the **SQL panel** (F3) |
-| `v` | table | cycle the SQL rendering: parameterized → literal → script |
-| `y` | table | copy the SQL — the whole script, or the selected statement |
-| `ctrl+c` | table | copy the cell / row / column / selection as the current format |
-| `b` | table | cycle the copy scope: cell → row → column → selection |
-| `p` | table | cycle the copy format TSV → CSV → JSON (remembered in settings.toml) |
-| `ctrl+v` | table | paste (terminal bracketed paste is the primary path) |
+| `enter` | tables | open the selected table (a table estimated above 100 rows offers a filter first) |
+| `enter` / `f4` | table | **edit** the focused cell |
+| `n` | table | **new row** (staged, never written directly) |
+| `delete` | table | **delete** the focused row (staged, never written directly) |
+| `ctrl+z` | table | **undo** the last staging action |
+| `ctrl+c` / `ctrl+v` | table | copy the cell / row / column / selection · paste a block |
+| `ctrl+s` | table | **commit** every staged change (behind the confirmation) |
+| `ctrl+p` | anywhere | command palette (everything the screen offers, incl. the keys below) |
+| `f2` / `f3` | table | inspector panel / **SQL panel** (via palette or these keys) |
+| `v` / `y` | table | cycle the SQL rendering (parameterized → literal → script) / copy the SQL |
+| `b` / `p` | table | cycle the copy scope (cell → row → column → selection) / cycle the copy format |
 | `i` / `o` | table | import a CSV/JSON file / export the rows on screen |
-| `g` | table | "generate SQL for…" this row or the current filter |
-| `m` | table | fetch the next page of rows (1000-row default page) |
-| `r` | table | reload metadata and rows |
-| arrows / `enter` | table | move the cell cursor (the inspector follows) / explain the cell |
-| `ctrl+p` | anywhere | command palette (fuzzy search over the current screen's actions) |
+| `g` | table | “generate SQL for…” this row or the current filter |
+| `c` / `f` / `s` | table | columns / quick-filter / sort by the focused column |
+| `w` | table | **expand** the focused cell — full text, or a hex dump for binary |
+| `m` / `r` | table | fetch the next page of rows (1000-row default page) / reload metadata and rows |
+| `arrows` / `enter` | table | move the cell cursor (the inspector follows) / explain the cell |
 | `f1` (or `?`) | anywhere | the help screen: every keybinding, grouped |
 | `f5` | table | toggle read-only mode for this session |
-| `ctrl+s` | table | apply every staged change (behind the confirmation) |
-| `w` | table | **expand** the focused cell — full text, or a hex dump for binary |
 | `ctrl+t` | anywhere | cycle the theme (persisted in `settings.toml`) |
 | `esc` | anywhere | back one level |
 | `ctrl+q` | anywhere | quit (the connection is closed first) |
+
+The footer only lists the CRUD path (edit / new / delete / undo / copy / paste /
+commit) — a footer that lists thirty keys teaches none of them. Everything else is
+one `ctrl+p` away, listed by the palette even when it has no footer entry.
 
 The full, authoritative list is in the application itself: press `F1`. The table above
 is a convenience, and `tests/unit/tui/test_keybindings.py` fails if the two drift apart.
@@ -213,8 +222,8 @@ An empty `keybindings.toml` template is written to the config directory on first
 Print the path with `--print-config-dir`, edit the file, restart:
 
 ```bash
-uv run sql-table-swiss-knife --print-config-dir
-# → /home/you/.config/sql-table-swiss-knife
+uv run sql-table-manager --print-config-dir
+# → /home/you/.config/sql-table-manager
 ```
 
 ```toml
@@ -316,10 +325,10 @@ Omit `read_only` and the environment decides: **production opens read-only**, ev
 else opens writable. A production profile that can write by accident is the failure this
 exists to prevent, so the safe answer is the default and turning writing on is always an
 explicit, visible act. `f5` toggles it for the session; the badge follows immediately.
-`sql-table-swiss-knife --read-only` forces read-only for the whole process and **locks the
+`sql-table-manager --read-only` forces read-only for the whole process and **locks the
 toggle** — a read-only session you cannot accidentally leave.
 
-Read-only is enforced at the *staging* boundary, not at Apply: edits are refused where
+Read-only is enforced at the *staging* boundary, not at commit: edits are refused where
 they would have been made, so a read-only session never accumulates work it will not be
 allowed to commit.
 
@@ -331,10 +340,10 @@ because "which database am I in" and "may I write" are two different questions a
 colour alone answers neither reliably.
 
 The badge is driven by the *same* `SafetyPolicy` object that gates the write. A badge
-reading `DEV` while the Apply dialog demands a production word would be worse than no
+reading `DEV` while the commit dialog demands a production word would be worse than no
 badge, so the two are structurally incapable of disagreeing — and a test pins it.
 
-### The Apply confirmation
+### The commit confirmation
 
 `ctrl+s` never writes directly. The dialog states what is about to happen:
 
@@ -468,7 +477,7 @@ Every theme declares the same *semantic* palette (`$pk`, `$fk`, `$identity`, `$c
 
 Profiles live in the platformdirs config dir (override with `SWISSKNIFE_CONFIG_DIR`) as
 `profiles.toml`. **Passwords are never written to that file** — they live in the OS keyring
-(keyring service `sql-table-swiss-knife`, account = `secret_ref`) or are prompted per
+(keyring service `sql-table-manager`, account = `secret_ref`) or are prompted per
 session when no keyring backend is available:
 
 ```toml
@@ -511,9 +520,9 @@ A temporary Milestone-2 command that prints the introspected metadata as Rich ta
 so you can check the `sys.*` layer without launching the TUI:
 
 ```bash
-uv run sql-table-swiss-knife inspect <profile> dbo.Region     # full metadata
-uv run sql-table-swiss-knife inspect <profile> x --list       # tables + row counts
-uv run sql-table-swiss-knife inspect <profile> x --databases  # databases
+uv run sql-table-manager inspect <profile> dbo.Region     # full metadata
+uv run sql-table-manager inspect <profile> x --list       # tables + row counts
+uv run sql-table-manager inspect <profile> x --databases  # databases
 ```
 
 It resolves the password from the keyring, prompting if needed. This command is expected
@@ -594,6 +603,11 @@ Stated plainly, because a list of them is more useful than a claim of completene
   code and the spec disagree; the spec has not been amended yet. Treat the README as
   current.
 - **`inspect` is a temporary developer command** and will be reworked or dropped.
+- **The rename migration is a copy, not a move, and secrets are not migrated.** An existing
+  `~/.config/sql-table-swiss-knife` directory is copied forward to `sql-table-manager` on
+  first start — only to fill gaps, a file that already exists under the new name wins — but
+  OS-keyring secrets are keyed on the service name, so a password stored under the old name
+  must be entered once again.
 
 ## Documentation
 

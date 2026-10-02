@@ -177,7 +177,7 @@ async def test_the_pending_strip_counts_what_is_staged(
         await _stage_name(app, pilot, "Xed")
         assert "1 update" in _pending(app)
 
-        await pilot.press("ctrl+n")  # a new row
+        await pilot.press("n")  # a new row
         await _settle(pilot)
         assert "1 insert, 1 update" in _pending(app)
 
@@ -216,7 +216,7 @@ async def test_a_new_row_appears_in_the_grid_with_a_marker(
         screen = await _open(app, pilot)
         rows_before = _grid(app).row_count
 
-        await pilot.press("ctrl+n")
+        await pilot.press("n")
         await _settle(pilot)
 
         assert _grid(app).row_count == rows_before + 1
@@ -233,7 +233,7 @@ async def test_a_new_row_can_be_filled_in_right_away(
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.pause()
         screen = await _open(app, pilot)
-        await pilot.press("ctrl+n")
+        await pilot.press("n")
         await _settle(pilot)
         await pilot.press("right")  # Name
         await pilot.press("enter")
@@ -261,7 +261,7 @@ async def test_revert_row_drops_a_staged_new_row_entirely(
         await pilot.pause()
         screen = await _open(app, pilot)
         rows_before = _grid(app).row_count
-        await pilot.press("ctrl+n")
+        await pilot.press("n")
         await _settle(pilot)
         assert _grid(app).row_count == rows_before + 1
 
@@ -368,7 +368,7 @@ async def test_a_filled_in_new_row_shows_its_value_not_null(
         await pilot.pause()
         await _open(app, pilot)
         rows_before = _grid(app).row_count
-        await pilot.press("ctrl+n")
+        await pilot.press("n")
         await _settle(pilot)
         await pilot.press("right")  # Name
         await pilot.press("enter")
@@ -435,7 +435,7 @@ async def test_a_refused_rebind_leaves_no_phantom_rows(
         await pilot.pause()
         screen = await _open(app, pilot)
         rows_before = _grid(app).row_count
-        await pilot.press("ctrl+n")
+        await pilot.press("n")
         await _settle(pilot)
         assert _grid(app).row_count == rows_before + 1
 

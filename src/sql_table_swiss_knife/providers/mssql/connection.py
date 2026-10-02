@@ -207,7 +207,7 @@ class SingleThreadRunner:
     """
 
     def __init__(self) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stsk-mssql")
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stm-mssql")
 
     async def run(self, func: Any, /, *args: Any, **kwargs: Any) -> Any:
         loop = asyncio.get_running_loop()

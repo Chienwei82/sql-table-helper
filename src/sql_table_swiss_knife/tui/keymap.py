@@ -10,7 +10,7 @@ file a user can edit without reading the source, and the file says so at the top
 
 The format is deliberately minimal::
 
-    # sql-table-swiss-knife keybindings
+    # sql-table-manager keybindings
     [keys]
     expand_cell = "w"
     apply = "ctrl+g"
@@ -44,7 +44,7 @@ _KNOWN_ACTIONS: Final[frozenset[str]] = frozenset(doc.action for doc in ACTIONS)
 
 #: Written into a fresh file so the format is discoverable without reading this source.
 _TEMPLATE: Final[str] = """\
-# sql-table-swiss-knife key bindings
+# sql-table-manager key bindings
 #
 # Remap any action by its name. Names are the ones the help screen (F1) shows;
 # an unknown name is reported rather than ignored, so a typo never silently

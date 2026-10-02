@@ -32,10 +32,12 @@ will this paste do?" Each module's own docstring is the authority for its behavi
 """
 
 from .catalog import (
+    LARGE_TABLE_THRESHOLD,
     CatalogService,
     SchemaGroup,
     filter_summaries,
     group_by_schema,
+    needs_filter_prompt,
 )
 from .changes import (
     ApplyError,
@@ -114,6 +116,7 @@ from .view import FilterMode, GridView, QuickFilter, toggle_sort, visible_column
 
 __all__ = [
     "DEFAULT_LIMIT",
+    "LARGE_TABLE_THRESHOLD",
     "PRODUCTION_CONFIRM_WORD",
     "ApplyError",
     "ApplyVerdict",
@@ -176,6 +179,7 @@ __all__ = [
     "header_label",
     "lookup_predicates",
     "map_database_error",
+    "needs_filter_prompt",
     "normalize_text",
     "parse_block",
     "plan_paste",

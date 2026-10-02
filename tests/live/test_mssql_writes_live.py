@@ -210,6 +210,34 @@ async def test_update_null_preimage_guard_applies_and_commits(
     assert stored["Name"] == "renamed"
 
 
+async def test_update_can_write_null_into_a_nullable_column(
+    live_connection: Any, clean_slate: None
+) -> None:
+    """The mirror image of the NULL-guard test: NULL in the SET clause, not the WHERE.
+
+    ``IS NULL`` in a comparison and ``None`` as a *value to write* are different driver
+    contracts; the first is a SQL predicate, the second a typed NULL parameter in the SET
+    list. ``dbo.Simple`` has no rowversion, so ``compare_original_values=True`` guards the
+    write, and the guard compares ``Name`` (non-null) while ``Qty`` carries the NULL — the
+    row must read back with ``Qty IS NULL``.
+    """
+    provider = MssqlProvider()
+    table = await table_of(live_connection, "dbo", "Simple")
+    (row,) = [r for r in await rows_of(live_connection, "dbo", "Simple") if r["Qty"] is not None]
+    key = (("Id", row["Id"]),)
+
+    result = await provider.execute_changes(
+        live_connection,
+        table,
+        [update_of(table, key, dict(row), {**dict(row), "Qty": None})],
+        ApplyOptions(compare_original_values=True),
+    )
+
+    assert result.committed is True, result.error
+    (stored,) = [r for r in await rows_of(live_connection, "dbo", "Simple") if r["Id"] == row["Id"]]
+    assert stored["Qty"] is None
+
+
 async def test_update_on_rowversion_table_uses_the_rowversion_guard(
     live_connection: Any, clean_slate: None
 ) -> None:

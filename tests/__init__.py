@@ -1,1 +1,1 @@
-"""Tests for sql-table-swiss-knife."""
+"""Tests for sql-table-manager."""

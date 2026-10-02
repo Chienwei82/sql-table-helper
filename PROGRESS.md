@@ -1,4 +1,4 @@
-# PROGRESS — sql-table-swiss-knife
+# PROGRESS — sql-table-manager
 
 Milestone status. **Update this file at the end of every milestone** and commit it with
 the milestone's work (see DESIGN.md §15 for the workflow).
@@ -78,6 +78,35 @@ formula injection (escaping would corrupt the data the tool exists to move faith
 it is now documented as a limitation in both READMEs), and `money`/`smallmoney` get no
 scale check (the server rounds rather than erroring).
 
+**Then a product round** (branch `feat/manager-rename-crud-first-and-large-table-prompt`).
+
+- **The distribution is renamed `sql-table-swiss-knife` → `sql-table-manager`**
+  (console scripts `sql-table-manager` + `stm`; import package `sql_table_swiss_knife`,
+  `SWISSKNIFE_*` env vars and the GitHub URLs deliberately unchanged). A tested
+  one-time migration copies the old config directory forward — a *copy*, never a move,
+  and an existing file under the new name wins; OS-keyring secrets are keyed on the
+  service name and are **not** carried over, which both READMEs state as a limitation.
+- **The editor is CRUD-first.** The footer teaches edit / new row / delete / undo /
+  copy / paste / `ctrl+s` (labelled **Commit changes**), the staging bar states what is
+  staged and that nothing is written yet, and the advanced keys (inspector, SQL panel,
+  generate, import/export, columns, filter, sort, reload) moved to the command palette —
+  which now also lists palette-only actions (`y`/`b`/`p`/`i`/`o`/`m`/redo) it previously
+  could not reach at all. The confirmation gate and the structural
+  no-write-before-`ctrl+s` guarantee are untouched.
+- **A table estimated above 100 rows offers a filter before it opens**
+  (`needs_filter_prompt`, pure, threshold overridable as `filter_prompt_threshold` in
+  `settings.toml`): the choice modal opens the table as-is or routes through the quick
+  filter, and a chosen filter applies to the *first* fetch.
+- **CI**: `.github/workflows/ci.yml` runs the five gates on push/PR. **Live suite**: the
+  missing `execute_changes` case for a nullable unchanged column (the P0 that a fake
+  cursor could not catch) is now in `tests/live/`.
+
+Gates on this round, run on the working tree: `ruff check` clean, `ruff format --check`
+160 files, `mypy` no issues in 142 files, `lint-imports` 1 kept / 0 broken, `pytest`
+**1115 passed, 85 skipped, 0 failed**, live suite **86 passed** against a real SQL Server
+2022 container, and the 24 regenerated SVG snapshots reviewed as *rendered text* (title,
+CRUD footer, "Commit changes …", help rows) before being accepted.
+
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 | Project skeleton & quality gates | ✅ |
@@ -114,7 +143,7 @@ shim. The full report is `uv run pytest --cov=sql_table_swiss_knife --cov-report
 ## M1 — Project skeleton & quality gates ✅
 
 - uv-managed `pyproject.toml` (`requires-python = ">=3.14"`), src layout, console entry
-  points `sql-table-swiss-knife` and `stsk`.
+  points `sql-table-manager` and `stm`.
 - ruff + mypy strict + pytest/pytest-asyncio configured.
 - Runnable Textual app: title banner, version, quit binding.
 - Domain dataclasses + identifier validation with unit tests.
@@ -131,7 +160,7 @@ shim. The full report is `uv run pytest --cov=sql_table_swiss_knife --cov-report
 - **No passwords in the file, ever.** A `password`/`pwd`/`secret_ref`-adjacent secret key
   in the TOML is rejected loudly at load time; only `secret_ref` (a keyring account name)
   is persisted. Covered by `tests/unit/storage/test_profiles.py`.
-- `SecretStore` protocol + `KeyringSecretStore` (service `sql-table-swiss-knife`) and
+- `SecretStore` protocol + `KeyringSecretStore` (service `sql-table-manager`) and
   `EphemeralSecretStore` fallback when no OS keyring backend works
   (`keyring.backends.fail.Keyring`, priority 0). `default_secret_store()` picks one;
   `resolve_password()` tries the store first, then prompts, then gives up.
@@ -189,9 +218,9 @@ Unicode `max_length` is reported in bytes by SQL Server and is halved for `nchar
 
 ### CLI (temporary, for verification)
 ```
-sql-table-swiss-knife inspect <profile> <schema.table>   # metadata as Rich tables
-sql-table-swiss-knife inspect <profile> x --list         # table listing
-sql-table-swiss-knife inspect <profile> x --databases    # database listing
+sql-table-manager inspect <profile> <schema.table>   # metadata as Rich tables
+sql-table-manager inspect <profile> x --list         # table listing
+sql-table-manager inspect <profile> x --databases    # database listing
 ```
 `inspect` is explicitly a developer aid for M2 and is expected to be reworked or removed
 once the TUI inspector (M4) exists.

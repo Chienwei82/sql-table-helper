@@ -13,7 +13,7 @@ summary of the same thing.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-swiss-knife --version
+uv run sql-table-manager --version
 ```
 
 Requires Python 3.14 (see `.python-version`). [`uv`](https://docs.astral.sh/uv/) manages

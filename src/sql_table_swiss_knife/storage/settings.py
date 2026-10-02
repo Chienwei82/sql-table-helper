@@ -76,6 +76,9 @@ class Settings:
     #: destructive mistake this tool could make, so it takes a deliberate opt-in. The
     #: policy's refusal message points here, which is why the key has to exist.
     allow_keyless_writes: bool = False
+    #: Above this many rows, opening a table from the browser offers to add a filter
+    #: before loading it (FR-2.5). A courtesy, never a gate — 0 disables the prompt.
+    filter_prompt_threshold: int = 100
 
     def __post_init__(self) -> None:
         if not self.theme.strip():
@@ -106,6 +109,10 @@ class Settings:
             )
         if self.paste_max_rows < 1:
             raise SettingsError(f"paste_max_rows must be >= 1, got {self.paste_max_rows}")
+        if self.filter_prompt_threshold < 0:
+            raise SettingsError(
+                f"filter_prompt_threshold must be >= 0, got {self.filter_prompt_threshold}"
+            )
 
     def with_theme(self, theme: str) -> Settings:
         """Return a copy using a different theme (the way the app persists a switch)."""

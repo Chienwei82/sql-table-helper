@@ -24,6 +24,7 @@ from sql_table_swiss_knife.services import (
     ConnectionService,
     filter_summaries,
     group_by_schema,
+    needs_filter_prompt,
 )
 from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
 
@@ -109,6 +110,36 @@ def test_group_by_schema_sorts_both_levels_and_skips_empty_schemas() -> None:
 
 def test_group_by_schema_on_empty_input() -> None:
     assert group_by_schema(()) == ()
+
+
+# -- large-table prompt (FR-2.5) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("row_count", "expected"),
+    [
+        (None, False),  # an unknown estimate never prompts
+        (0, False),
+        (1, False),
+        (100, False),  # exactly at the threshold does not prompt ...
+        (101, True),  # ... one over does
+        (12_345, True),
+    ],
+)
+def test_needs_filter_prompt_boundaries(row_count: int | None, expected: bool) -> None:
+    """The threshold is a boundary, so it is tested at the boundary, not around a type."""
+    assert needs_filter_prompt(row_count) is expected
+
+
+def test_needs_filter_prompt_honours_a_custom_threshold() -> None:
+    assert needs_filter_prompt(50, threshold=10) is True
+    assert needs_filter_prompt(5, threshold=10) is False
+
+
+def test_a_zero_threshold_disables_the_prompt() -> None:
+    """The documented opt-out: ``filter_prompt_threshold = 0`` never asks again."""
+    assert needs_filter_prompt(10_000_000, threshold=0) is False
+    assert needs_filter_prompt(10_000_000, threshold=-1) is False
 
 
 # -- service ------------------------------------------------------------

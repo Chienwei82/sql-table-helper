@@ -103,13 +103,12 @@ async def test_f3_opens_and_closes_the_sql_panel(
     """The panel is opt-in, so it must not take grid space until it is asked for."""
     app = app_factory(profiles=seeded_profiles)
     async with app.run_test(size=(110, 30)) as pilot:
-        screen = await _open(app, pilot)
+        await _open(app, pilot)
         assert _panel(app).has_class("-hidden")
 
         await pilot.press("f3")
         await _settle(pilot)
         assert not _panel(app).has_class("-hidden")
-        assert "f3" in " ".join(hint.key for hint in screen.hints_for())
 
         await pilot.press("f3")
         await _settle(pilot)
