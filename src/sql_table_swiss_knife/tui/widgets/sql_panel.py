@@ -185,9 +185,12 @@ class SqlPanel(VerticalScroll):
         if preview.generated is not None:
             listing.append(ListItem(Static(Content(preview.generated_title or "statement"))))
             return
-        if not preview.entries:
+        # display_entries covers the last Apply too (FR-5.5): once staging is empty the
+        # list keeps showing what ran, and the script row below still copies it.
+        entries = preview.display_entries
+        if not entries:
             return
-        for entry in preview.entries:
+        for entry in entries:
             listing.append(ListItem(Static(self._entry_label(entry))))
         # The script is the last, all-inclusive choice: it is what "copy script" copies.
         listing.append(ListItem(Static(Content("▶ whole script"))))
@@ -196,12 +199,16 @@ class SqlPanel(VerticalScroll):
         """The statement-list row: ``1  UPDATE  dbo.Country (Code='DE')``.
 
         The kind is both a word and a colour, so the row never relies on colour alone
-        (FR-3.7).
+        (FR-3.7). While the last Apply is shown the index is replaced by a check mark:
+        these statements already ran, and mistaking them for pending work is exactly the
+        confusion the summary line above exists to prevent (FR-5.5).
         """
+        preview = self.preview
+        marker = "✓ " if preview is not None and preview.showing_applied else f"{entry.index}  "
         kind = entry.kind.value.upper()
         row = "" if entry.row_key is None else f"  {entry.row_key[0][0]}={entry.row_key[0][1]!r}"
         return Text.assemble(
-            (f"{entry.index}  ", "dim"),
+            (marker, "green" if preview is not None and preview.showing_applied else "dim"),
             (f"{kind}  ", _KIND_COLOURS[kind]),
             (entry.table, ""),
             (row, "dim"),
@@ -280,7 +287,7 @@ class SqlPanel(VerticalScroll):
         preview = self.preview
         if preview is None or preview.generated is not None:
             return ()
-        return (*preview.entries, "script")
+        return (*preview.display_entries, "script")
 
     def _sync_tabs(self) -> None:
         """Point the tab strip at the preview's mode."""

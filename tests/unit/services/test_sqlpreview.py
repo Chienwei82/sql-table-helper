@@ -16,6 +16,7 @@ from sql_table_swiss_knife.domain.changes import ChangeKind, PendingChange
 from sql_table_swiss_knife.providers.mssql import TSqlDialect
 from sql_table_swiss_knife.services.sqlpreview import (
     PREVIEW_ONLY_NOTE,
+    AppliedRun,
     RowAction,
     SqlMode,
     SqlPreview,
@@ -351,6 +352,127 @@ def test_a_generated_statement_replaces_the_change_list(dialect: TSqlDialect, ta
     assert generated.body() == "SELECT 1"
     assert generated.copy_all() == "SELECT 1"
     assert generated.summary() == "SELECT"
+
+
+# -- after Apply (FR-5.5) ----------------------------------------------------
+
+
+def _run(dialect: TSqlDialect, table: Table, duration_ms: int = 42) -> AppliedRun:
+    """A completed run of the same three changes the preview would have shown."""
+    return AppliedRun(
+        entries=entries_for(dialect, table, _changes()),
+        duration_ms=duration_ms,
+    )
+
+
+def test_an_applied_run_states_what_ran_and_how_long_it_took(
+    dialect: TSqlDialect, table: Table
+) -> None:
+    """FR-5.5's own wording: the statements stay visible as "ran (success)", with timing."""
+    assert _run(dialect, table, 42).summary == "ran (success) · 3 statements · 42 ms"
+    one = AppliedRun(entries=entries_for(dialect, table, _changes()[:1]), duration_ms=7)
+    assert one.summary == "ran (success) · 1 statement · 7 ms"
+
+
+def test_the_panel_keeps_showing_what_ran_after_staging_clears(
+    dialect: TSqlDialect, table: Table
+) -> None:
+    """The whole point of FR-5.5: a committed Apply must not blank the panel.
+
+    The staging area is empty at this point, so without the applied run the panel would
+    fall back to the "nothing staged" hint — the SQL the user was shown just before
+    pressing Apply would simply vanish.
+    """
+    applied = _run(dialect, table)
+    preview = SqlPreview(table=table, dialect=dialect, applied=applied)
+    assert not preview.is_empty
+    assert preview.showing_applied
+    assert preview.display_entries == applied.entries
+    assert "no pending changes" not in preview.body()
+    assert preview.summary() == applied.summary
+
+
+def test_what_ran_is_shown_in_every_rendering(dialect: TSqlDialect, table: Table) -> None:
+    """All three modes describe the applied statements, so the view never disappears."""
+    applied = _run(dialect, table)
+    for mode in SqlMode:
+        preview = SqlPreview(table=table, dialect=dialect, applied=applied, mode=mode)
+        assert "UPDATE" in preview.body()
+    # The parameterized rendering carries its values in the legend, not in the body.
+    parameterized = SqlPreview(
+        table=table, dialect=dialect, applied=applied, mode=SqlMode.PARAMETERIZED
+    )
+    assert "@p0" in parameterized.body()
+    assert "N'neu'" in parameterized.parameters()
+    script = SqlPreview(table=table, dialect=dialect, applied=applied).script()
+    assert "BEGIN TRANSACTION;" in script
+    assert "COMMIT TRANSACTION;" in script
+
+
+def test_copying_after_an_apply_copies_what_ran(dialect: TSqlDialect, table: Table) -> None:
+    applied = _run(dialect, table)
+    preview = SqlPreview(table=table, dialect=dialect, applied=applied)
+    assert preview.copy_all() == preview.script()
+    assert "BEGIN TRANSACTION;" in preview.copy_all()
+    copied = preview.copy_entry(1)
+    assert copied.startswith(applied.entries[0].text(SqlMode.PARAMETERIZED))
+    assert "N'neu'" in copied  # parameterized copy carries its values (FR-4.8)
+
+
+def test_pending_changes_take_priority_over_the_last_apply(
+    dialect: TSqlDialect, table: Table
+) -> None:
+    """The panel owes the user the plan for what runs next (FR-7.2) over history."""
+    applied = _run(dialect, table)
+    staged = entries_for(dialect, table, _changes()[:1])
+    preview = SqlPreview(table=table, dialect=dialect, entries=staged, applied=applied)
+    assert not preview.showing_applied
+    assert preview.display_entries == staged
+    assert preview.summary() == "1 statement · 1 update"
+    # Once that work is applied or discarded, the run becomes visible again.
+    assert SqlPreview(table=table, dialect=dialect, applied=applied).showing_applied
+
+
+def test_a_generated_statement_still_wins_over_everything(
+    dialect: TSqlDialect, table: Table
+) -> None:
+    """A statement the user explicitly asked for outranks pending and applied alike."""
+    preview = SqlPreview(table=table, dialect=dialect, applied=_run(dialect, table))
+    generated = preview.with_generated("SELECT 1", "SELECT")
+    assert generated.body() == "SELECT 1"
+    assert not generated.showing_applied
+
+
+def test_an_applied_run_needs_statements_and_a_sane_duration(
+    dialect: TSqlDialect, table: Table
+) -> None:
+    """A run that changed nothing never happened; a negative duration is a bad measurement."""
+    with pytest.raises(ValueError, match="never ran anything"):
+        AppliedRun(entries=(), duration_ms=1)
+    with pytest.raises(ValueError, match="duration_ms"):
+        AppliedRun(entries=entries_for(dialect, table, _changes()), duration_ms=-1)
+
+
+def test_the_applied_script_keeps_the_identity_insert_flag_it_ran_with(
+    dialect: TSqlDialect,
+) -> None:
+    """The staging area cannot answer this after the run; the run itself has to.
+
+    Without the carried flag the script rendering would silently drop
+    ``SET IDENTITY_INSERT``, so "the script that ran" would be a different script —
+    exactly the drift FR-5.4 exists to prevent.
+    """
+    keyed = _table(identity=True)
+    changes = [PendingChange(ChangeKind.INSERT, keyed.ref, after={"Code": "X", "Name": "n"})]
+    applied = AppliedRun(
+        entries=entries_for(dialect, keyed, changes, identity_insert=True),
+        duration_ms=1,
+        identity_insert=True,
+    )
+    # identity_insert is False on the preview itself: staging is empty after the run.
+    script = SqlPreview(table=keyed, dialect=dialect, applied=applied).script()
+    assert "SET IDENTITY_INSERT [dbo].[Country] ON;" in script
+    assert "SET IDENTITY_INSERT [dbo].[Country] OFF;" in script
 
 
 # -- panel state -------------------------------------------------------------

@@ -286,6 +286,67 @@ async def test_copying_nothing_says_so_instead_of_emptying_the_clipboard(
         assert "nothing to copy" in str(screen.status.message)
 
 
+# -- after Apply (FR-5.5) ------------------------------------------------------
+
+
+async def _apply(app: App[None], pilot: Pilot[None]) -> None:
+    """Commit the staged changes and let the re-fetch finish (FR-7.6, FR-7.7)."""
+    await pilot.press("ctrl+s")
+    await _settle(pilot)
+    await pilot.press("y")
+    for _ in range(SETTLE):
+        await pilot.pause()
+
+
+async def test_applying_keeps_the_statements_visible_as_ran_success(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """FR-5.5: the SQL that ran stays on screen, labelled as having run.
+
+    Before the fix the panel fell back to "nothing staged" the moment Apply committed,
+    so the one moment where the user wants to re-read what was just written to the
+    database was exactly the moment the panel went blank.
+    """
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await _open(app, pilot)
+        await _stage_name(app, pilot, "Germany")
+        await pilot.press("f3")
+        await _settle(pilot)
+        assert _summary(app) == "1 statement · 1 update"
+
+        await _apply(app, pilot)
+
+        summary = _summary(app)
+        assert summary.startswith("ran (success)")
+        assert " ms" in summary
+        assert "UPDATE" in _body(app)
+        assert "Germany" in _body(app)
+        labels = [str(item.query_one(Static).render()) for item in _listing(app).children]
+        assert any("UPDATE" in label for label in labels)
+
+
+async def test_staging_again_puts_the_plan_back_in_front(
+    app_factory: AppFactory, seeded_profiles: ProfileStore
+) -> None:
+    """The panel owes the user what runs *next*; the run returns once staging is empty."""
+    app = app_factory(profiles=seeded_profiles)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await _open(app, pilot)
+        await _stage_name(app, pilot, "Germany")
+        await _apply(app, pilot)
+        # Opened after the run, so this also covers the panel being closed across Apply.
+        await pilot.press("f3")
+        await _settle(pilot)
+        assert _summary(app).startswith("ran (success)")
+
+        await _stage_name(app, pilot, "France")
+        await _settle(pilot)
+        assert _summary(app) == "1 statement · 1 update"
+        assert "Germany" not in _body(app)
+        assert "France" in _body(app)
+
+
 # -- "generate SQL for…" (FR-5.6) --------------------------------------------
 
 

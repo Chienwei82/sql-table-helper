@@ -450,6 +450,12 @@ la transacción no quede enmascarado por un segundo.
 seleccionada obtienes esa sentencia (en modo parametrizado, junto con sus valores de
 parámetro — un `@p0` suelto no es algo que puedas pegar).
 
+**Tras aplicar, las sentencias permanecen.** Cuando `ctrl+s` confirma, el panel no queda en
+blanco: conserva las sentencias que ejecutó, marcadas como `ran (success)` junto con lo que
+tardó la transacción, para que puedas volver a leer (y volver a copiar) el SQL que tocó tu
+base de datos en el momento en que más probablemente lo quieras. Si preparas algo nuevo, el
+plan nuevo vuelve a ponerse delante.
+
 **Nada se ejecuta desde aquí.** El panel es solo de vista previa y lo dice en su cabecera. El
 manejo de `SET`/`IDENTITY_INSERT` y todas las acciones de "generar" producen *texto*; lo
 único en la aplicación que escribe es Apply (`ctrl+s`), tras una confirmación.
@@ -626,9 +632,6 @@ completitud:
 - **No se admite la importación de `.xlsx` de Excel.** Sí la importación de archivos CSV y
   JSON, a través del mismo analizador y vista previa que un pegado desde el portapapeles.
   El `.xlsx` en sí no se lee — el CSV exportado desde Excel funciona.
-- **La importación/exportación basada en archivos está construida pero SPEC §2.2 sigue
-  listándola como fuera de alcance.** El código y la especificación discrepan; la
-  especificación aún no se ha corregido. Trata el README como lo vigente.
 - **`inspect` es un comando temporal de desarrollo** y se reescribirá o se eliminará.
 - **La migración del cambio de nombre es una copia, no un movimiento, y las contraseñas no
   se migran.** Un directorio `~/.config/sql-table-swiss-knife` existente se copia al nuevo

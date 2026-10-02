@@ -431,6 +431,11 @@ cannot be masked by a second one.
 get that statement (in parameterized mode, together with its parameter values — a bare
 `@p0` is not something you can paste).
 
+**After Apply, the statements stay.** Once `ctrl+s` commits, the panel does not go blank: it
+keeps the statements it ran, marked `ran (success)` with how long the transaction took, so
+the SQL that touched your database can be re-read (and re-copied) at the moment you are
+most likely to want it. Staging something new puts the new plan back in front.
+
 **Nothing is executed from here.** The panel is preview-only and says so in its header.
 `SET`/`IDENTITY_INSERT` handling and every "generate" action produce *text*; the only thing
 in the app that writes is Apply (`ctrl+s`), behind a confirmation.
@@ -599,9 +604,6 @@ Stated plainly, because a list of them is more useful than a claim of completene
 - **Excel `.xlsx` import is not supported.** CSV and JSON file import are, through the
   same parser and preview as a clipboard paste. `.xlsx` itself is not read — CSV exported
   from Excel works.
-- **File-based import/export is built but SPEC §2.2 still lists it as out of scope.** The
-  code and the spec disagree; the spec has not been amended yet. Treat the README as
-  current.
 - **`inspect` is a temporary developer command** and will be reworked or dropped.
 - **The rename migration is a copy, not a move, and secrets are not migrated.** An existing
   `~/.config/sql-table-swiss-knife` directory is copied forward to `sql-table-manager` on
