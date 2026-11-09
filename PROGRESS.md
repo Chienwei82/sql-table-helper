@@ -1,4 +1,4 @@
-# PROGRESS — sql-table-manager
+# PROGRESS — mssql-manager-tui
 
 Milestone status. **Update this file at the end of every milestone** and commit it with
 the milestone's work (see DESIGN.md §15 for the workflow).
@@ -81,8 +81,8 @@ scale check (the server rounds rather than erroring).
 **Then a product round** (branch `feat/manager-rename-crud-first-and-large-table-prompt`).
 
 - **The distribution is renamed `sql-table-swiss-knife` → `sql-table-manager`**
-  (console scripts `sql-table-manager` + `stm`; import package `sql_table_swiss_knife`,
-  `SWISSKNIFE_*` env vars and the GitHub URLs deliberately unchanged). A tested
+  (console scripts `sql-table-manager` + `stm`; import package `mssql_manager_tui`,
+  `MSSQL_MANAGER_*` env vars and the GitHub URLs deliberately unchanged). A tested
   one-time migration copies the old config directory forward — a *copy*, never a move,
   and an existing file under the new name wins; OS-keyring secrets are keyed on the
   service name and are **not** carried over, which both READMEs state as a limitation.
@@ -123,10 +123,10 @@ CRUD footer, "Commit changes …", help rows) before being accepted.
 | Gate | Result |
 |---|---|
 | `ruff check .` | ✅ clean |
-| `ruff format --check .` | ✅ 143 files already formatted |
-| `mypy` (strict, `src` + `tests`) | ✅ no issues in 136 source files |
+| `ruff format --check .` | ✅ 162 files already formatted |
+| `mypy` (strict, `src` + `tests`) | ✅ no issues in 144 source files |
 | `lint-imports` (layering contract) | ✅ 1 kept, 0 broken |
-| `pytest` | ✅ **1014 passed, 80 skipped** (the skips are the live suite) |
+| `pytest` | ✅ **1124 passed, 86 skipped** (the skips are the live suite) |
 | live suite (SQL Server 2022) | ✅ **81 passed** against a real container — `tests/live/run-live.sh` |
 | `uv build` | ✅ sdist + wheel; the wheel installs and both entry points run |
 | Coverage | **87%** (statements + branches) |
@@ -136,14 +136,14 @@ The coverage is deliberately uneven, and the gaps are the honest part of the pic
 where a bug is expensive, while the thin screens (`lookup_picker` 24%, `quick_filter` 37%,
 `column_picker` 39%) are lightly covered and the giant `table_editor.py` (73%) carries the
 long tail of interaction branches. The 0% on `__main__.py` is the two-line module
-shim. The full report is `uv run pytest --cov=sql_table_swiss_knife --cov-report=term-missing`.
+shim. The full report is `uv run pytest --cov=mssql_manager_tui --cov-report=term-missing`.
 
 ---
 
 ## M1 — Project skeleton & quality gates ✅
 
 - uv-managed `pyproject.toml` (`requires-python = ">=3.14"`), src layout, console entry
-  points `sql-table-manager` and `stm`.
+  points `mssql-manager-tui` and `stm`.
 - ruff + mypy strict + pytest/pytest-asyncio configured.
 - Runnable Textual app: title banner, version, quit binding.
 - Domain dataclasses + identifier validation with unit tests.
@@ -155,12 +155,12 @@ shim. The full report is `uv run pytest --cov=sql_table_swiss_knife --cov-report
 
 ### Connection profiles (`storage/`)
 - `ProfileStore` — TOML file under the platformdirs config dir (override with
-  `SWISSKNIFE_CONFIG_DIR`), atomic write, mode `0600`, sorted by name, `get`/`upsert`/
+  `MSSQL_MANAGER_CONFIG_DIR`), atomic write, mode `0600`, sorted by name, `get`/`upsert`/
   `delete`/round-trip.
 - **No passwords in the file, ever.** A `password`/`pwd`/`secret_ref`-adjacent secret key
   in the TOML is rejected loudly at load time; only `secret_ref` (a keyring account name)
   is persisted. Covered by `tests/unit/storage/test_profiles.py`.
-- `SecretStore` protocol + `KeyringSecretStore` (service `sql-table-manager`) and
+- `SecretStore` protocol + `KeyringSecretStore` (service `mssql-manager-tui`) and
   `EphemeralSecretStore` fallback when no OS keyring backend works
   (`keyring.backends.fail.Keyring`, priority 0). `default_secret_store()` picks one;
   `resolve_password()` tries the store first, then prompts, then gives up.
@@ -218,9 +218,9 @@ Unicode `max_length` is reported in bytes by SQL Server and is halved for `nchar
 
 ### CLI (temporary, for verification)
 ```
-sql-table-manager inspect <profile> <schema.table>   # metadata as Rich tables
-sql-table-manager inspect <profile> x --list         # table listing
-sql-table-manager inspect <profile> x --databases    # database listing
+mssql-manager-tui inspect <profile> <schema.table>   # metadata as Rich tables
+mssql-manager-tui inspect <profile> x --list         # table listing
+mssql-manager-tui inspect <profile> x --databases    # database listing
 ```
 `inspect` is explicitly a developer aid for M2 and is expected to be reworked or removed
 once the TUI inspector (M4) exists.
@@ -241,11 +241,11 @@ once the TUI inspector (M4) exists.
 | `tests/live/test_mssql_writes_live.py` | **live** `execute_changes`: DML, rollback, conflicts, triggers |
 
 The live suite is marked `live` and is **skipped** unless
-`SWISSKNIFE_TEST_DB_URL` points at a reachable server:
+`MSSQL_MANAGER_TEST_DB_URL` points at a reachable server:
 
 ```bash
 cd tests/live && docker compose up -d
-export SWISSKNIFE_TEST_DB_URL="mssql://sa:SwissKnife%212022_Test@localhost:1433/SwissKnifeSample"
+export MSSQL_MANAGER_TEST_DB_URL="mssql://sa:MssqlManager%212022_Test@localhost:1433/MssqlManagerSample"
 uv run pytest -m live
 ```
 
@@ -726,7 +726,7 @@ should be predictable, refuse the dangerous thing by default, and leave a record
 - **One registry** of every documented action, its keys and its description.
 - **A drift check** against the real screens' `BINDINGS`: rebinding a key in a screen
   without updating the documentation fails the test suite.
-- **A configurable keymap** (`keybindings.toml`, `SWISSKNIFE_KEYBINDINGS` override): an
+- **A configurable keymap** (`keybindings.toml`, `MSSQL_MANAGER_KEYBINDINGS` override): an
   unknown action name, a non-string value or malformed TOML is reported as a warning and
   the defaults are kept — an optional preferences file must never stop the app.
 - **`F1` / `?`** opens the help screen from anywhere.

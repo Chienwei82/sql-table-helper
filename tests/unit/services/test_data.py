@@ -7,10 +7,9 @@ Runs against ``FakeProvider``, so the paging *semantics* are verified without a 
 from pathlib import Path
 
 import pytest
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, make_profile
 
-from sql_table_swiss_knife.domain import (
-    AuthMode,
+from mssql_manager_tui.domain import (
     Column,
     ConnectionProfile,
     FilterOp,
@@ -22,9 +21,9 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     UniqueConstraint,
 )
-from sql_table_swiss_knife.services import ConnectionService, DataService, status_text
-from sql_table_swiss_knife.services.data import RowWindow
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+from mssql_manager_tui.services import ConnectionService, DataService, status_text
+from mssql_manager_tui.services.data import RowWindow
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore
 
 COUNTRY = Table(
     schema="dbo",
@@ -56,14 +55,7 @@ ROWS: dict[str, list[dict[str, object]]] = {
 
 
 def _profile() -> ConnectionProfile:
-    return ConnectionProfile(
-        name="catalog",
-        provider="fake",
-        host="localhost",
-        database="test",
-        username="sa",
-        auth=AuthMode.SQL,
-    )
+    return make_profile(name="catalog")
 
 
 async def _connected(tmp_path: Path, tables: tuple[Table, ...]) -> DataService:

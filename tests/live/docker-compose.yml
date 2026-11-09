@@ -3,8 +3,8 @@
 #   docker compose up -d        # start server, then load the init/*.sql fixtures
 #   docker compose down -v      # wipe data
 #
-# Connect: localhost,1433 · user sa · password ${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}
-# Database: SwissKnifeSample
+# Connect: localhost,1433 · user sa · password ${MSSQL_SA_PASSWORD:-MssqlManager!2022_Test}
+# Database: MssqlManagerSample
 #
 # The explicit project name keeps the container name stable (swissknife-live-sqlserver-1),
 # which run-live.sh relies on to find the shared network.
@@ -17,7 +17,7 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: "Developer"
-      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-MssqlManager!2022_Test}"
       MSSQL_TCP_PORT: "1433"
     ports:
       - "${MSSQL_PORT:-1433}:1433"
@@ -49,7 +49,7 @@ services:
       sqlserver:
         condition: service_healthy
     environment:
-      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-SwissKnife!2022_Test}"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-MssqlManager!2022_Test}"
     volumes:
       - ./init:/init:ro
     entrypoint: ["/bin/bash", "-c"]
@@ -73,7 +73,7 @@ services:
           echo "--- loading $$f"
           "$$SQLCMD" -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" $$TRUST -b -I -i "$$f"
         done
-        echo "SwissKnifeSample database initialized."
+        echo "MssqlManagerSample database initialized."
 
 volumes:
   sqlserver-data:

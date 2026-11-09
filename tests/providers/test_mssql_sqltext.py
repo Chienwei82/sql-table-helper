@@ -2,8 +2,8 @@
 
 import pytest
 
-from sql_table_swiss_knife.providers.mssql import metadata as md
-from sql_table_swiss_knife.providers.mssql.provider import OBJECT_LOOKUP_SQL, SERVER_INFO_SQL
+from mssql_manager_tui.providers.mssql import metadata as md
+from mssql_manager_tui.providers.mssql.provider import OBJECT_LOOKUP_SQL, SERVER_INFO_SQL
 
 #: Every sys.* view M2 must introspect through.
 REQUIRED_VIEWS = {

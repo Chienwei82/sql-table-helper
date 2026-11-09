@@ -1,11 +1,17 @@
 """In-memory ``DatabaseProvider`` fake used for contract and service tests."""
 
+from __future__ import annotations
+
 import re
 import time
-from collections.abc import Sequence
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
 
-from sql_table_swiss_knife.domain import (
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+from mssql_manager_tui.domain import (
+    AuthMode,
     ChangeKind,
     ConnectionProfile,
     Database,
@@ -19,7 +25,7 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableSummary,
 )
-from sql_table_swiss_knife.providers import (
+from mssql_manager_tui.providers import (
     ActiveConnection,
     ApplyOptions,
     ExecuteResult,
@@ -32,10 +38,53 @@ from sql_table_swiss_knife.providers import (
     build_statements,
     sort_for_apply,
 )
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
+from mssql_manager_tui.providers.mssql import TSqlDialect
 
 #: Wording the fake uses for a 0-rowcount concurrency conflict (FR-7.8).
 CONFLICT = "row changed by someone else (0 rows affected)"
+
+
+def make_profile(
+    name: str = "catalog",
+    *,
+    database: str | None = "test",
+    provider: str = "fake",
+) -> ConnectionProfile:
+    """The SQL-auth profile most service tests connect with.
+
+    Centralised so the repeated ``ConnectionProfile(name="catalog", provider="fake",
+    host="localhost", port=1433, database="test", username="sa", auth=AuthMode.SQL)``
+    shape cannot drift between test modules.
+    """
+    return ConnectionProfile(
+        name=name,
+        provider=provider,
+        host="localhost",
+        port=1433,
+        database=database,
+        username="sa",
+        auth=AuthMode.SQL,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackContext:
+    """Everything one rollback needs, instead of nine positional arguments."""
+
+    state_rows: list[dict[str, object]]
+    snapshot: list[dict[str, object]]
+    results: list[StatementResult]
+    conflicts: list[RowConflict]
+    change: PendingChange
+    statement: SqlStatement
+    index: int
+    started: float
+    error: str
+
+
+def replace_error(attempt: RollbackContext, error: str) -> RollbackContext:
+    """The same attempt, carrying the failure that actually happened."""
+    return replace(attempt, error=error)
 
 
 class FakeConnection:
@@ -173,50 +222,31 @@ class FakeProvider:
         conflicts: list[RowConflict] = []
         for index, (change, statement) in enumerate(zip(ordered, statements, strict=True)):
             self.executed.append(statement.sql_parametrized)
+            attempt = RollbackContext(
+                state_rows=state_rows,
+                snapshot=snapshot,
+                results=results,
+                conflicts=conflicts,
+                change=change,
+                statement=statement,
+                index=index,
+                started=started,
+                error="",
+            )
             if self._fail_on is not None and index == self._fail_on:
-                return self._rollback(
-                    state_rows,
-                    snapshot,
-                    results,
-                    conflicts,
-                    change,
-                    statement,
-                    index,
-                    started,
-                    "simulated failure",
-                )
+                return self._rollback(replace_error(attempt, "simulated failure"))
             if self._conflict_on is not None and index == self._conflict_on:
                 # Somebody else changed the row first: 0 rows affected, so roll back.
                 conflicts.append(RowConflict(change, statement, CONFLICT))
                 results.append(StatementResult(change, statement, 0, False, CONFLICT))
-                return self._rollback(
-                    state_rows,
-                    snapshot,
-                    results,
-                    conflicts,
-                    change,
-                    statement,
-                    index,
-                    started,
-                    f"{CONFLICT}: update of {change.key}",
-                )
+                return self._rollback(replace_error(attempt, f"{CONFLICT}: update of {change.key}"))
             rowcount, error = self._apply_change(change, state_rows)
             if error is not None:
                 if error == CONFLICT:
                     # A 0-rowcount UPDATE/DELETE is a concurrency conflict, reported
                     # per row just like the real providers do (FR-7.8).
                     conflicts.append(RowConflict(change, statement, error))
-                return self._rollback(
-                    state_rows,
-                    snapshot,
-                    results,
-                    conflicts,
-                    change,
-                    statement,
-                    index,
-                    started,
-                    error,
-                )
+                return self._rollback(replace_error(attempt, error))
             results.append(StatementResult(change, statement, rowcount, True, None))
         if settings.identity_insert and any(s.kind is ChangeKind.INSERT for s in statements):
             self.transaction_log.append("IDENTITY_INSERT OFF")
@@ -271,29 +301,20 @@ class FakeProvider:
                     rows.pop(index)
                 return 1, None
 
-    def _rollback(
-        self,
-        state_rows: list[dict[str, object]],
-        snapshot: list[dict[str, object]],
-        results: list[StatementResult],
-        conflicts: list[RowConflict],
-        change: PendingChange,
-        statement: SqlStatement,
-        index: int,
-        started: float,
-        error: str,
-    ) -> ExecuteResult:
+    def _rollback(self, attempt: RollbackContext) -> ExecuteResult:
         """Roll back to the snapshot and report the failing statement (FR-7.6)."""
-        state_rows[:] = snapshot
-        results.append(StatementResult(change, statement, 0, False, error))
+        attempt.state_rows[:] = attempt.snapshot
+        attempt.results.append(
+            StatementResult(attempt.change, attempt.statement, 0, False, attempt.error)
+        )
         self.transaction_log.append("ROLLBACK")
         return ExecuteResult(
             committed=False,
-            results=tuple(results),
-            duration_ms=_elapsed_ms(started),
-            failed_index=index,
-            error=error,
-            conflicts=tuple(conflicts),
+            results=tuple(attempt.results),
+            duration_ms=_elapsed_ms(attempt.started),
+            failed_index=attempt.index,
+            error=attempt.error,
+            conflicts=tuple(attempt.conflicts),
         )
 
 
@@ -318,32 +339,31 @@ def _find_row(rows: list[dict[str, object]], key: RowKey) -> int | None:
 
 def _matches(value: object | None, row_filter: RowFilter) -> bool:
     kind = row_filter.operator
+    expected = row_filter.value
+    # DB scalars of one column are homogeneous; loosen typing for plain comparisons.
+    left: Any = value
+    right: Any = expected
     if kind is FilterOp.IS_NULL:
         return value is None
     if kind is FilterOp.IS_NOT_NULL:
         return value is not None
     if value is None:
         return False  # SQL three-valued logic: NULL never compares true
-    expected = row_filter.value
-    # DB scalars of one column are homogeneous; loosen typing for plain comparisons.
-    left: Any = value
-    right: Any = expected
-    match kind:
-        case FilterOp.EQ:
-            return bool(left == right)
-        case FilterOp.NE:
-            return bool(left != right)
-        case FilterOp.LT:
-            return bool(left < right)
-        case FilterOp.LE:
-            return bool(left <= right)
-        case FilterOp.GT:
-            return bool(left > right)
-        case FilterOp.GE:
-            return bool(left >= right)
-        case FilterOp.LIKE:
-            return _like(value, expected)
-    return False
+    return _compare(kind, left, right, value, expected)
+
+
+def _compare(kind: FilterOp, left: Any, right: Any, value: object, expected: object) -> bool:
+    if kind is FilterOp.LIKE:
+        return _like(value, expected)
+    operators = {
+        FilterOp.EQ: left == right,
+        FilterOp.NE: left != right,
+        FilterOp.LT: left < right,
+        FilterOp.LE: left <= right,
+        FilterOp.GT: left > right,
+        FilterOp.GE: left >= right,
+    }
+    return bool(operators.get(kind, False))
 
 
 def _like(value: object, pattern: object) -> bool:

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from sql_table_swiss_knife.domain import AuthMode, ConnectionOptions, ConnectionProfile
-from sql_table_swiss_knife.storage import ProfileError, ProfileStore
+from mssql_manager_tui.domain import AuthMode, ConnectionOptions, ConnectionProfile
+from mssql_manager_tui.storage import ProfileError, ProfileStore
 
 
 def _sql_profile() -> ConnectionProfile:
@@ -14,7 +14,7 @@ def _sql_profile() -> ConnectionProfile:
         provider="mssql",
         host="localhost",
         port=1433,
-        database="SwissKnifeSample",
+        database="MssqlManagerSample",
         auth=AuthMode.SQL,
         username="sa",
         secret_ref="local@localhost",

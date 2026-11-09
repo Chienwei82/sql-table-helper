@@ -7,7 +7,7 @@
 -- the write/concurrency tests · types that stress the driver round-trip · a
 -- system-versioned (temporal) table · a plain table for the many-rows test.
 
-USE SwissKnifeSample;
+USE MssqlManagerSample;
 GO
 
 -- Schemas other than dbo, one with a space and one with an accent.
@@ -276,5 +276,5 @@ IF NOT EXISTS (SELECT 1 FROM dbo.Account)
     INSERT INTO dbo.Account (Balance) VALUES (100.00);
 GO
 
-SELECT 'SwissKnifeSample edge fixtures ready' AS status;
+SELECT 'MssqlManagerSample edge fixtures ready' AS status;
 GO

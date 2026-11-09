@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from sql_table_swiss_knife import cli
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui import cli
+from mssql_manager_tui.domain import (
     AuthMode,
     CheckConstraint,
     Column,
@@ -144,7 +144,7 @@ def test_render_metadata_flags_missing_primary_key() -> None:
 
 
 def test_print_table_summaries(capsys: pytest.CaptureFixture[str]) -> None:
-    from sql_table_swiss_knife.domain import TableSummary
+    from mssql_manager_tui.domain import TableSummary
 
     cli._print_table_summaries(
         [
@@ -180,13 +180,13 @@ def _patch_inspect(
     password: str | None,
 ) -> list[str]:
     """Point the inspect command at a profile file, a provider and a password."""
-    from sql_table_swiss_knife.storage import ProfileStore
+    from mssql_manager_tui.storage import ProfileStore
 
     ProfileStore(tmp_path / "profiles.toml").upsert(profile)
-    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("MSSQL_MANAGER_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(cli, "get_provider", lambda name: provider)
 
-    from sql_table_swiss_knife import storage
+    from mssql_manager_tui import storage
 
     class _Store:
         persistent = False
@@ -250,9 +250,9 @@ async def test_inspect_reports_unknown_profile(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """`_run_inspect` propagates storage errors; `main` is what turns them into exit 1."""
-    from sql_table_swiss_knife.storage import ProfileError
+    from mssql_manager_tui.storage import ProfileError
 
-    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("MSSQL_MANAGER_CONFIG_DIR", str(tmp_path))
     with pytest.raises(ProfileError, match="unknown profile"):
         await cli._run_inspect(
             argparse.Namespace(profile="nope", table="dbo.Country", list=False, databases=False)
@@ -262,7 +262,7 @@ async def test_inspect_reports_unknown_profile(
 def test_main_returns_error_code_for_failing_inspect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("MSSQL_MANAGER_CONFIG_DIR", str(tmp_path))
     code = cli.main(["inspect", "missing", "dbo.Country"])
     assert code == 1
     assert "error:" in capsys.readouterr().err
@@ -272,7 +272,7 @@ def test_print_config_dir_prints_the_directory_and_exits(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The flag exists so scripts and docs never guess where the files live."""
-    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("MSSQL_MANAGER_CONFIG_DIR", str(tmp_path))
     assert cli.main(["--print-config-dir"]) == 0
     assert capsys.readouterr().out.strip() == str(tmp_path)
 
@@ -281,7 +281,7 @@ def test_print_config_dir_does_not_launch_the_tui(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A query for a path must not open a full-screen app on someone's terminal."""
-    monkeypatch.setenv("SWISSKNIFE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("MSSQL_MANAGER_CONFIG_DIR", str(tmp_path))
     launched = False
 
     def explode(**kwargs: object) -> None:
@@ -289,6 +289,6 @@ def test_print_config_dir_does_not_launch_the_tui(
         launched = True
         raise AssertionError("the TUI must not start for --print-config-dir")
 
-    monkeypatch.setattr(cli, "SwissKnifeApp", explode)
+    monkeypatch.setattr(cli, "MssqlManagerApp", explode)
     assert cli.main(["--print-config-dir"]) == 0
     assert launched is False

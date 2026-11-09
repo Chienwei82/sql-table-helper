@@ -2,7 +2,7 @@
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     FetchSpec,
     FilterOp,
     Row,
@@ -31,7 +31,7 @@ def test_make_row_key() -> None:
 def test_make_row_key_requires_columns_and_presence() -> None:
     with pytest.raises(ValueError, match="at least one column"):
         make_row_key((), {"A": 1})
-    with pytest.raises(KeyError, match="missing"):
+    with pytest.raises(ValueError, match="missing"):
         make_row_key(("Nope",), {"A": 1})
 
 

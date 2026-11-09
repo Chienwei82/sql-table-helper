@@ -2,15 +2,15 @@
 
 import pytest
 
-from sql_table_swiss_knife.domain import AuthMode, ConnectionProfile
-from sql_table_swiss_knife.storage import (
+from mssql_manager_tui.domain import AuthMode, ConnectionProfile
+from mssql_manager_tui.storage import (
     EphemeralSecretStore,
     SecretStoreError,
     default_secret_store,
     resolve_password,
     secret_ref_for,
 )
-from sql_table_swiss_knife.storage.secrets import KeyringSecretStore
+from mssql_manager_tui.storage.secrets import KeyringSecretStore
 
 SECRET = "sup3r-s3cret"
 

@@ -14,9 +14,9 @@ from uuid import UUID
 
 import pytest
 
-from sql_table_swiss_knife.domain.rows import FilterOp
-from sql_table_swiss_knife.providers.dialect import SqlScript
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
+from mssql_manager_tui.domain.rows import FilterOp
+from mssql_manager_tui.providers.dialect import SqlScript
+from mssql_manager_tui.providers.mssql import TSqlDialect
 
 
 @pytest.fixture

@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import ReferentialAction, Table, TableKind
-from sql_table_swiss_knife.providers.mssql import metadata as md
-from sql_table_swiss_knife.services.inspector import format_data_type
-from sql_table_swiss_knife.services.validation import _length_limit, validate_input
+from mssql_manager_tui.domain import ReferentialAction, Table, TableKind
+from mssql_manager_tui.providers.mssql import metadata as md
+from mssql_manager_tui.services.inspector import format_data_type
+from mssql_manager_tui.services.validation import _length_limit, validate_input
 
 # -- helpers ------------------------------------------------------------------
 
@@ -418,17 +418,17 @@ def test_object_kind() -> None:
 
 def test_databases_from_rows() -> None:
     rows = [
-        {"database_name": "master", "current_database": "SwissKnifeSample", "database_id": 1},
+        {"database_name": "master", "current_database": "MssqlManagerSample", "database_id": 1},
         {
-            "database_name": "SwissKnifeSample",
-            "current_database": "SwissKnifeSample",
+            "database_name": "MssqlManagerSample",
+            "current_database": "MssqlManagerSample",
             "database_id": 5,
         },
     ]
     databases = md.databases_from_rows(rows)
     assert [(d.name, d.is_current) for d in databases] == [
         ("master", False),
-        ("SwissKnifeSample", True),
+        ("MssqlManagerSample", True),
     ]
 
 

@@ -121,7 +121,7 @@ demanded is worse than no badge.
 | domain / services / providers | plain `pytest` | decisions tested as pure functions; no terminal, no database |
 | TUI | Textual `Pilot` (`run_test`) | the user's actual interactions, driven key by key |
 | visuals | `pytest-textual-snapshot` | SVG screenshots; a layout regression is a test failure, and the same SVGs are the README images |
-| integration | `pytest -m live` | real SQL Server via `tests/live/docker-compose.yml`; skipped unless `SWISSKNIFE_TEST_DB_URL` is set |
+| integration | `pytest -m live` | real SQL Server via `tests/live/docker-compose.yml`; skipped unless `MSSQL_MANAGER_TEST_DB_URL` is set |
 
 `FakeProvider` implements the full provider protocol against in-memory fixtures, so the
 whole application is testable — including Apply, rollback and concurrency conflicts —

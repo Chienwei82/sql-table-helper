@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     ForeignKey,

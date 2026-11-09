@@ -26,5 +26,5 @@ docker build -q -t "$image" -f "$here/Dockerfile.runner" "$here" >/dev/null
 
 exec docker run --rm --network "$network" \
     -v "$repo":/src -w /src \
-    -e "SWISSKNIFE_TEST_DB_URL=mssql://sa:SwissKnife%212022_Test@sqlserver:1433/SwissKnifeSample" \
+    -e "MSSQL_MANAGER_TEST_DB_URL=mssql://sa:MssqlManager%212022_Test@sqlserver:1433/MssqlManagerSample" \
     "$image" uv run --group dev pytest -m live "$@"

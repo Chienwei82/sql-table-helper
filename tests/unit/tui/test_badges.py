@@ -2,8 +2,8 @@
 
 import pytest
 
-from sql_table_swiss_knife.domain import TableKind, TableSummary
-from sql_table_swiss_knife.tui.widgets import badges_for, node_label
+from mssql_manager_tui.domain import TableKind, TableSummary
+from mssql_manager_tui.tui.widgets import badges_for, node_label
 
 PLAIN = TableSummary("dbo", "AuditLog", TableKind.BASE_TABLE)
 WITH_PK = TableSummary("dbo", "Country", TableKind.BASE_TABLE, has_primary_key=True)

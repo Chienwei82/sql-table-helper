@@ -24,7 +24,7 @@ connection, the design is wrong.
 ## Step 1 — the dialect (start here, it's the fun part)
 
 ```python
-# src/sql_table_swiss_knife/providers/postgres/dialect.py
+# src/mssql_manager_tui/providers/postgres/dialect.py
 """PostgreSQL dialect."""
 
 from ..dialect import Condition, SqlScript
@@ -72,7 +72,7 @@ parameterized and copy-ready renderings share one composition path:
 ## Step 2 — the provider (the I/O)
 
 ```python
-# src/sql_table_swiss_knife/providers/postgres/provider.py
+# src/mssql_manager_tui/providers/postgres/provider.py
 class PostgresProvider:
     """PostgreSQL provider: async psycopg over a thread pool."""
 
@@ -151,7 +151,7 @@ BUILTIN_PROVIDERS: dict[str, ProviderFactory] = {
 ```
 
 Keep the import inside the factory. Importing the driver eagerly would make `import
-sql_table_swiss_knife` fail for everyone who has not installed psycopg, and the mssql
+mssql_manager_tui` fail for everyone who has not installed psycopg, and the mssql
 provider sets that precedent on purpose.
 
 ## Step 4 — ship it as a plugin (no fork)
@@ -197,12 +197,12 @@ probably in the wrong place.
 - [ ] dialect unit tests, metadata mapping test, error mapping tests
 - [ ] `mypy` and `ruff` clean
 
-`sql_table_swiss_knife.providers` entry point group, so you can support a DBMS without
+`mssql_manager_tui.providers` entry point group, so you can support a DBMS without
 forking this repository:
 
 ```toml
 # your package's pyproject.toml
-[project.entry-points."sql_table_swiss_knife.providers"]
+[project.entry-points."mssql_manager_tui.providers"]
 postgres = "your_package:PostgresProvider"
 ```
 

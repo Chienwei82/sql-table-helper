@@ -1,4 +1,4 @@
-# DESIGN — sql-table-manager
+# DESIGN — mssql-manager-tui
 
 Status: **v0.4 — M1–M4 implemented** (see [PROGRESS.md](PROGRESS.md) for live status)
 Companion document: [SPEC.md](SPEC.md) (requirements, milestones, open questions).
@@ -59,15 +59,15 @@ Dependency rules (enforced by review + import-linter in CI):
 ## 3. Folder layout
 
 ```
-sql-table-manager/
+mssql-manager-tui/
 ├── SPEC.md / DESIGN.md / README.md / PROGRESS.md   # PROGRESS = milestone status
 ├── pyproject.toml            # uv-managed; metadata, deps, ruff/mypy/pytest config
 ├── uv.lock
 ├── .python-version           # 3.14
 ├── src/
-│   └── sql_table_swiss_knife/
+│   └── mssql_manager_tui/
 │       ├── __init__.py
-│       ├── __main__.py       # python -m sql_table_swiss_knife
+│       ├── __main__.py       # python -m mssql_manager_tui
 │       ├── cli.py            # entry point: run app, --version, --help
 │       ├── domain/
 │       │   ├── identifiers.py# SchemaName/TableName/ColumnName (validated value objects)
@@ -98,7 +98,7 @@ sql-table-manager/
 │       │   ├── secrets.py    # SecretStore: KeyringSecretStore | EphemeralSecretStore
 │       │   └── paths.py      # platformdirs config/data/log locations
 │       ├── tui/
-│       │   ├── app.py        # SwissKnifeApp, screen stack, global bindings, themes
+│       │   ├── app.py        # MssqlManagerApp, screen stack, global bindings, themes
 │       │   ├── screens/      # home (profiles), profile_edit, database_picker,
 │       │   │                 # table_picker, grid (workspace)
 │       │   ├── widgets/      # data_grid, sql_preview, inspector, pending_badge, status
@@ -115,8 +115,8 @@ sql-table-manager/
     └── add-a-database.md     # checklist for new DBMS providers
 ```
 
-Entry point: console script `sql-table-manager` (short alias `stm` — OQ-2) →
-`sql_table_swiss_knife.cli:main`.
+Entry point: console script `mssql-manager-tui` (short alias `stm` — OQ-2) →
+`mssql_manager_tui.cli:main`.
 
 ## 4. Domain model
 
@@ -525,7 +525,7 @@ class SecretStore(Protocol):
     def persistent(self) -> bool: ...  # False → "prompt each session" mode
 ```
 
-- `KeyringSecretStore` — `keyring` package; service name `sql-table-manager`, account =
+- `KeyringSecretStore` — `keyring` package; service name `mssql-manager-tui`, account =
   `secret_ref` (profile name + host). Used when `keyring.get_keyring()` is functional
   (backend != fail backend).
 - `EphemeralSecretStore` — in-memory dict for the session when no keyring exists (headless
@@ -734,7 +734,7 @@ maturity/coverage, say so and we flip the default before M2.
 | Domain (`domain/`) | pytest (sync) | identifier validation, ChangeSet collapse/dedupe rules, row keys, model invariants |
 | SQL generation (`providers/sqlgen.py`, dialects) | pytest, no DB | parameterized + literal text for INSERT/UPDATE/DELETE across value types (str/unicode/quote/NULL/date/decimal/binary/uuid), WHERE identity building, rowversion guard, ordering (D→U→I) |
 | Services | pytest-asyncio + FakeProvider | staging flows, Apply orchestration incl. rollback-on-error sequencing, fetch/paging, clipboard plan parsing (TSV/CSV/JSON battery) |
-| Provider contract | pytest, parametrized | same suite against FakeProvider always; against live SQL Server when `SWISSKNIFE_TEST_DB_URL` is set (skipped otherwise): metadata completeness vs known schema, paging, transactional apply/rollback |
+| Provider contract | pytest, parametrized | same suite against FakeProvider always; against live SQL Server when `MSSQL_MANAGER_TEST_DB_URL` is set (skipped otherwise): metadata completeness vs known schema, paging, transactional apply/rollback |
 | TUI | Textual `run_test()` + Pilot | screen flows (home → picker → grid), search-as-you-type filtering, cell edit staging visuals, dialogs (apply confirm, discard), paste flows, help overlay, quit-with-pending guard |
 | Security | pytest | redaction through logging/exceptions/previews (planted secrets must never appear), profile files never contain secrets, keyring fallback behavior (mocked backend) |
 | Static | ruff check/format, mypy --strict, import-linter | NFR-1 gates, layer dependency rules (§2) |
@@ -770,7 +770,7 @@ Principles:
 
 ```toml
 [project]
-name = "sql-table-manager"
+name = "mssql-manager-tui"
 requires-python = ">=3.14"
 dependencies = [
   "textual>=8.2",
@@ -785,8 +785,8 @@ clipboard = ["pyperclip>=1.9"]     # optional system-clipboard read fallback
 mssql-alt = ["mssql-python>=1.15"] # optional alternative driver (future, OQ-1)
 
 [project.scripts]
-sql-table-manager = "sql_table_swiss_knife.cli:main"
-stm = "sql_table_swiss_knife.cli:main"
+mssql-manager-tui = "mssql_manager_tui.cli:main"
+stm = "mssql_manager_tui.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=9", "pytest-asyncio>=1.4", "pytest-cov>=7",
@@ -812,7 +812,7 @@ rowcount_advisory_above = 50000
 
 ### 13.3 CLI
 
-`sql-table-manager [--profile NAME] [--read-only] [--debug] [--debug-sql-values]
+`mssql-manager-tui [--profile NAME] [--read-only] [--debug] [--debug-sql-values]
 [--version]` — no flags launches the Home screen. `--read-only` forces S-9 globally for the
 session (useful when demoing against production).
 
@@ -846,7 +846,7 @@ into `.venv`, never add a `requirements.txt`.
 | add a dev dependency | `uv add --dev <pkg>` |
 | remove a dependency | `uv remove <pkg>` |
 | run something in the env | `uv run <cmd>` (e.g. `uv run pytest`, `uv run mypy`) |
-| run the app | `uv run sql-table-manager` |
+| run the app | `uv run mssql-manager-tui` |
 | upgrade the lockfile | `uv lock --upgrade` |
 
 `uv run` works whether or not a venv has been created — it syncs on demand. The

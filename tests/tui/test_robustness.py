@@ -9,10 +9,10 @@ from textual.app import App
 from textual.coordinate import Coordinate
 from textual.widgets import TextArea
 
-from sql_table_swiss_knife.services.connection import is_connection_lost
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import CellViewScreen, TableEditorScreen
-from sql_table_swiss_knife.tui.widgets import DataGrid
+from mssql_manager_tui.services.connection import is_connection_lost
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.screens import CellViewScreen, TableEditorScreen
+from mssql_manager_tui.tui.widgets import DataGrid
 from tests.fakes import FakeProvider
 from tests.tui.conftest import AppFactory, active_screen
 from tests.tui.test_table_editing import _open, _settle, _stage_name

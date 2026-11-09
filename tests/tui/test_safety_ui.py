@@ -9,15 +9,15 @@ required before the confirm button arms.
 from textual.app import App
 from textual.widgets import Button, Input
 
-from sql_table_swiss_knife.domain import ChangeKind, Environment
-from sql_table_swiss_knife.services import (
+from mssql_manager_tui.domain import ChangeKind, Environment
+from mssql_manager_tui.services import (
     PRODUCTION_CONFIRM_WORD,
     ApplyVerdict,
     TypedConfirmation,
 )
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import ApplyConfirmScreen, TableEditorScreen
-from sql_table_swiss_knife.tui.widgets import EnvBadge
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.screens import ApplyConfirmScreen, TableEditorScreen
+from mssql_manager_tui.tui.widgets import EnvBadge
 from tests.fakes import FakeProvider
 from tests.tui.conftest import AppFactory, active_screen
 from tests.tui.test_table_editing import _open, _settle

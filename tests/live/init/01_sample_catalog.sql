@@ -4,11 +4,11 @@
 -- Coverage: identity PK · composite PK · FKs · self-referencing FK · computed column ·
 -- rowversion column · defaults · CHECK · UNIQUE · AFTER trigger · INSTEAD OF trigger.
 
-IF DB_ID(N'SwissKnifeSample') IS NULL
-    CREATE DATABASE SwissKnifeSample;
+IF DB_ID(N'MssqlManagerSample') IS NULL
+    CREATE DATABASE MssqlManagerSample;
 GO
 
-USE SwissKnifeSample;
+USE MssqlManagerSample;
 GO
 
 IF OBJECT_ID(N'dbo.Country', N'U') IS NULL
@@ -151,5 +151,5 @@ BEGIN
 END;
 GO
 
-SELECT 'SwissKnifeSample ready' AS status;
+SELECT 'MssqlManagerSample ready' AS status;
 GO

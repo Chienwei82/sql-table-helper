@@ -1,7 +1,7 @@
 [project]
-name = "sql-table-manager"
+name = "mssql-manager-tui"
 dynamic = ["version"]
-description = "Terminal (TUI) app to view and edit rows of catalog/lookup tables without writing SQL — and to show the SQL it runs."
+description = "Terminal (TUI) app to view and edit rows of Microsoft SQL Server catalog/lookup tables without writing SQL — and to show the SQL it runs."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
@@ -41,8 +41,10 @@ Source = "https://github.com/Chienwei82/sql-table-helper"
 Issues = "https://github.com/Chienwei82/sql-table-helper/issues"
 
 [project.scripts]
-sql-table-manager = "sql_table_swiss_knife.cli:main"
-stm = "sql_table_swiss_knife.cli:main"
+mssql-manager-tui = "mssql_manager_tui.cli:main"
+# Backwards-compatible aliases for the previous distribution name.
+sql-table-manager = "mssql_manager_tui.cli:main"
+stm = "mssql_manager_tui.cli:main"
 
 [dependency-groups]
 dev = [
@@ -60,10 +62,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/sql_table_swiss_knife/__init__.py"
+path = "src/mssql_manager_tui/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sql_table_swiss_knife"]
+packages = ["src/mssql_manager_tui"]
 
 [tool.ruff]
 line-length = 100
@@ -71,10 +73,39 @@ target-version = "py314"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+# PLR0913 (too many positional args) is expected for domain/test factories that
+# mirror the SQL Server catalog shape; per-file ignores below relax it further
+# in tests.
+# TC (type-checking imports) and PT018/PLR2004 are intentionally not enabled:
+# TC would churn every textual `compose()` signature for zero runtime gain, and
+# PLR2004/PT018 flag idiomatic test expectations (counts, limits, compound
+# asserts) — the value is noise here. PT/RET/A/PLR (minus the rules above)
+# are the useful subset.
+# PLR0911/PLR0912/PLR0917 are design-level (error mappers, rollback helpers,
+# provider methods) — the existing dispatch-style functions are the clearest
+# form; a noqa with a reason is preferable to splitting them for the linter.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "PT", "RET", "A", "PLR"]
+ignore = ["PLR0913", "PLR2004", "PT018", "A004", "PLR0911", "PLR0912", "PLR0917", "A001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally use assert (S101), raise test-local exceptions with
+# formatted messages (TRY003/EM101/EM102), shadow builtins in fixtures (A002,
+# A004), build wide domain objects positionally (PLR0913), and use PLR2004
+# magic counts for expectations. PT022 is ignored: yield-fixtures without
+# teardown are the idiomatic short form.
+"tests/**" = ["S101", "TRY003", "EM101", "EM102", "PLR0913", "A002", "A004", "PLR2004", "PT018", "PT011", "PT012", "PT022"]
+# Standalone scripts legitimately invoke subprocesses (S603).
+"scripts/**" = ["S603"]
+
+# PLR2004 (magic values in comparisons) is expected in the TUI for layout
+# numbers (widths/heights) and in services for thresholds that are already
+# named constants at the call site; A004 fires on the domain `Warning` model
+# and textual `id` parameters, both intentional.
+"src/mssql_manager_tui/tui/**" = ["PLR2004", "A002", "A004"]
+"src/mssql_manager_tui/services/**" = ["PLR2004", "A004"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sql_table_swiss_knife"]
+known-first-party = ["mssql_manager_tui"]
 
 [tool.mypy]
 strict = true
@@ -87,22 +118,25 @@ pretty = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = ["--strict-config", "--strict-markers"]
+# Default to the fast, self-contained suite. Live tests are opt-in via the
+# explicit `-m live` CLI flag (which overrides this `-m "not live"`), e.g.
+# `uv run pytest -m live` or `./tests/live/run-live.sh`.
+addopts = ["--strict-config", "--strict-markers", "-m", "not live"]
 filterwarnings = [
     # Upstream: pytest-textual-snapshot still calls datetime.utcnow() when it writes
     # the HTML diff report. Nothing we can fix in this repo.
     "ignore:datetime.datetime.utcnow\\(\\) is deprecated:DeprecationWarning",
 ]
 markers = [
-    "live: integration test needing a real SQL Server (tests/live/docker-compose.yml); skipped unless SWISSKNIFE_TEST_DB_URL is set",
+    "live: integration test needing a real SQL Server (tests/live/docker-compose.yml); skipped unless MSSQL_MANAGER_TEST_DB_URL is set",
 ]
 
 [tool.coverage.run]
-source = ["sql_table_swiss_knife"]
+source = ["mssql_manager_tui"]
 branch = true
 
 [tool.importlinter]
-root_package = "sql_table_swiss_knife"
+root_package = "mssql_manager_tui"
 
 # The architecture in docs/ARCHITECTURE.md, as an executable contract. Each layer is
 # allowed to import the ones below it and nothing above: the point is that `domain`
@@ -112,10 +146,10 @@ root_package = "sql_table_swiss_knife"
 name = "Layered architecture"
 type = "layers"
 layers = [
-    "sql_table_swiss_knife.tui",
-    "sql_table_swiss_knife.services",
-    "sql_table_swiss_knife.storage",
-    "sql_table_swiss_knife.providers",
-    "sql_table_swiss_knife.infra",
-    "sql_table_swiss_knife.domain",
+    "mssql_manager_tui.tui",
+    "mssql_manager_tui.services",
+    "mssql_manager_tui.storage",
+    "mssql_manager_tui.providers",
+    "mssql_manager_tui.infra",
+    "mssql_manager_tui.domain",
 ]

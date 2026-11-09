@@ -8,8 +8,7 @@ from typing import cast
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
-    AuthMode,
+from mssql_manager_tui.domain import (
     ChangeKind,
     ConnectionProfile,
     FetchSpec,
@@ -19,25 +18,18 @@ from sql_table_swiss_knife.domain import (
     SortKey,
     Table,
 )
-from sql_table_swiss_knife.providers import (
+from mssql_manager_tui.providers import (
     DatabaseProvider,
     ExecuteResult,
     MetadataError,
     ProviderCapabilities,
     SqlDialect,
 )
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, make_profile
 
 
 def _profile() -> ConnectionProfile:
-    return ConnectionProfile(
-        name="test",
-        provider="fake",
-        host="localhost",
-        database="test",
-        username="sa",
-        auth=AuthMode.SQL,
-    )
+    return make_profile(name="test")
 
 
 def test_fake_satisfies_protocol() -> None:

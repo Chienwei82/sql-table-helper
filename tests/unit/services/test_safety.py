@@ -7,7 +7,7 @@ user cannot understand is a refusal they will work around.
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     Column,
     ConnectionProfile,
@@ -16,8 +16,8 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
-from sql_table_swiss_knife.domain.changes import ChangeKind
-from sql_table_swiss_knife.services.safety import (
+from mssql_manager_tui.domain.changes import ChangeKind
+from mssql_manager_tui.services.safety import (
     PRODUCTION_CONFIRM_WORD,
     BlockedReason,
     SafetyPolicy,

@@ -1,1 +1,1 @@
-"""Tests for sql-table-manager."""
+"""Tests for mssql-manager-tui."""

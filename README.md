@@ -1,4 +1,4 @@
-# sql-table-manager
+# mssql-manager-tui
 
 **Edit catalog tables without writing SQL — and always see the SQL it runs.**
 
@@ -108,7 +108,7 @@ transaction guarantee, and a word that must be typed.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-manager
+uv run mssql-manager-tui
 ```
 
 Requires Python 3.14. To connect you also need an **ODBC driver manager** and the
@@ -119,7 +119,7 @@ private CA fails `uv sync` in a way `pip` would not. See
 [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md), and the `uv pip` route below.
 
 > The package is **not published on PyPI yet**, so the `uv tool install
-> sql-table-manager` line that used to sit here does not work. Install from a
+> mssql-manager-tui` line that used to sit here does not work. Install from a
 > checkout, or build a wheel with `uv build` and install the result.
 
 ### Installing with `uv pip` instead of `uv sync`
@@ -133,7 +133,7 @@ source .venv/bin/activate                # Windows: .venv\Scripts\activate
 uv pip install -e .                      # runtime only
 uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
 uv pip install -e ".[clipboard]"         # + the better clipboard backend
-sql-table-manager                      # or the short alias: stm
+mssql-manager-tui                      # or the short alias: stm
 ```
 
 Two things to know, both of which will bite you otherwise:
@@ -156,7 +156,7 @@ A **single-file** build is also supported for locked-down machines and for dropp
 app onto a server without touching its Python:
 
 ```bash
-uv run scripts/build_standalone.py        # writes dist/sql-table-manager (one file)
+uv run scripts/build_standalone.py        # writes dist/mssql-manager-tui (one file)
 ```
 
 It uses [PyInstaller](https://pyinstaller.org) (declared as the optional `standalone`
@@ -172,8 +172,8 @@ uv run pytest -m live       # integration tests (need the docker server, see bel
 uv run ruff check .         # lint
 uv run ruff format --check .  # format check
 uv run mypy                 # strict type check
-uv run sql-table-manager --version
-uv run sql-table-manager   # launch the TUI (quit: ctrl+q)
+uv run mssql-manager-tui --version
+uv run mssql-manager-tui   # launch the TUI (quit: ctrl+q)
 ```
 
 ## Using the TUI
@@ -222,8 +222,8 @@ An empty `keybindings.toml` template is written to the config directory on first
 Print the path with `--print-config-dir`, edit the file, restart:
 
 ```bash
-uv run sql-table-manager --print-config-dir
-# → /home/you/.config/sql-table-manager
+uv run mssql-manager-tui --print-config-dir
+# → /home/you/.config/mssql-manager-tui
 ```
 
 ```toml
@@ -325,7 +325,7 @@ Omit `read_only` and the environment decides: **production opens read-only**, ev
 else opens writable. A production profile that can write by accident is the failure this
 exists to prevent, so the safe answer is the default and turning writing on is always an
 explicit, visible act. `f5` toggles it for the session; the badge follows immediately.
-`sql-table-manager --read-only` forces read-only for the whole process and **locks the
+`mssql-manager-tui --read-only` forces read-only for the whole process and **locks the
 toggle** — a read-only session you cannot accidentally leave.
 
 Read-only is enforced at the *staging* boundary, not at commit: edits are refused where
@@ -480,9 +480,9 @@ Every theme declares the same *semantic* palette (`$pk`, `$fk`, `$identity`, `$c
 
 ## Connection profiles
 
-Profiles live in the platformdirs config dir (override with `SWISSKNIFE_CONFIG_DIR`) as
+Profiles live in the platformdirs config dir (override with `MSSQL_MANAGER_CONFIG_DIR`) as
 `profiles.toml`. **Passwords are never written to that file** — they live in the OS keyring
-(keyring service `sql-table-manager`, account = `secret_ref`) or are prompted per
+(keyring service `mssql-manager-tui`, account = `secret_ref`) or are prompted per
 session when no keyring backend is available:
 
 ```toml
@@ -491,7 +491,7 @@ name = "local"
 provider = "mssql"
 host = "localhost"
 port = 1433
-database = "SwissKnifeSample"
+database = "MssqlManagerSample"
 auth = "sql"                  # or "integrated" for Windows integrated auth
 username = "sa"
 secret_ref = "local@localhost"   # keyring account, NOT the password
@@ -514,8 +514,8 @@ docker compose up -d          # starts SQL Server, then loads init/01_sample_cat
 docker compose down -v        # wipe
 ```
 
-Connection: `localhost,1433`, user `sa`, password `SwissKnife!2022_Test`
-(override with `MSSQL_SA_PASSWORD`), database `SwissKnifeSample`.
+Connection: `localhost,1433`, user `sa`, password `MssqlManager!2022_Test`
+(override with `MSSQL_SA_PASSWORD`), database `MssqlManagerSample`.
 
 Running pyodbc on Linux additionally needs `unixODBC` and the Microsoft ODBC Driver 18.
 
@@ -525,9 +525,9 @@ A temporary Milestone-2 command that prints the introspected metadata as Rich ta
 so you can check the `sys.*` layer without launching the TUI:
 
 ```bash
-uv run sql-table-manager inspect <profile> dbo.Region     # full metadata
-uv run sql-table-manager inspect <profile> x --list       # tables + row counts
-uv run sql-table-manager inspect <profile> x --databases  # databases
+uv run mssql-manager-tui inspect <profile> dbo.Region     # full metadata
+uv run mssql-manager-tui inspect <profile> x --list       # tables + row counts
+uv run mssql-manager-tui inspect <profile> x --databases  # databases
 ```
 
 It resolves the password from the keyring, prompting if needed. This command is expected
@@ -536,7 +536,7 @@ to be reworked or dropped: the TUI inspector shows the same metadata interactive
 ## Layout
 
 ```
-src/sql_table_swiss_knife/
+src/mssql_manager_tui/
   domain/      pure models — ConnectionProfile, Table, PendingChange, RowKey (no I/O)
   providers/   DatabaseProvider + SqlDialect protocols, shared SQL generation, plugin
                registry, and mssql/ (connection string, error mapping, sys.* metadata)
@@ -562,7 +562,7 @@ layer fails the build rather than a code review.
 ```bash
 uv run pytest                    # everything; live tests skip themselves
 uv run pytest tests/unit -q      # fast: no terminal, no database
-uv run pytest --cov=sql_table_swiss_knife --cov-report=term-missing
+uv run pytest --cov=mssql_manager_tui --cov-report=term-missing
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                      # strict, src + tests
 ```
@@ -606,7 +606,7 @@ Stated plainly, because a list of them is more useful than a claim of completene
   from Excel works.
 - **`inspect` is a temporary developer command** and will be reworked or dropped.
 - **The rename migration is a copy, not a move, and secrets are not migrated.** An existing
-  `~/.config/sql-table-swiss-knife` directory is copied forward to `sql-table-manager` on
+  `~/.config/mssql-manager-tui` directory is copied forward to `mssql-manager-tui` on
   first start — only to fill gaps, a file that already exists under the new name wins — but
   OS-keyring secrets are keyed on the service name, so a password stored under the old name
   must be entered once again.

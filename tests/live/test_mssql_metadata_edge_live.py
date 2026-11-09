@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     ChangeKind,
     FetchSpec,
     FilterOp,
@@ -23,7 +23,7 @@ from sql_table_swiss_knife.domain import (
     RowFilter,
     TableKind,
 )
-from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 from tests.live.test_mssql_writes_live import table_of
 
 pytestmark = pytest.mark.live
@@ -39,8 +39,8 @@ async def test_a_unicode_column_reports_its_declared_character_width(
     advertises nvarchar(25) and rejects the last 25 characters on edit. Asserted against
     the real server so the byte-to-character step cannot drift unnoticed.
     """
-    from sql_table_swiss_knife.services.inspector import format_data_type
-    from sql_table_swiss_knife.services.validation import _length_limit
+    from mssql_manager_tui.services.inspector import format_data_type
+    from mssql_manager_tui.services.validation import _length_limit
 
     typed = await table_of(live_connection, "dbo", "Typed")
     column = typed.column("TextShort")
@@ -231,7 +231,7 @@ async def test_approximate_row_count_is_reported(live_connection: Any) -> None:
 
 
 async def test_missing_schema_or_table_raises_metadata_error(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers import MetadataError
+    from mssql_manager_tui.providers import MetadataError
 
     provider = MssqlProvider()
     with pytest.raises(MetadataError, match="does not exist"):
@@ -242,7 +242,7 @@ async def test_missing_schema_or_table_raises_metadata_error(live_connection: An
 
 async def test_a_procedure_is_not_reported_as_a_table(live_connection: Any) -> None:
     """sys.objects holds procedures and functions too; they must not appear as tables."""
-    from sql_table_swiss_knife.providers import MetadataError
+    from mssql_manager_tui.providers import MetadataError
 
     with pytest.raises((MetadataError, Exception)):
         await MssqlProvider().get_table_metadata(live_connection, "dbo", "sp_renamed")

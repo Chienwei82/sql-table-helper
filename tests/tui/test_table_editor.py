@@ -10,10 +10,10 @@ from textual.coordinate import Coordinate
 from textual.pilot import Pilot
 from textual.widgets import Static
 
-from sql_table_swiss_knife.domain.catalog import TableSummary
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import CellEditorScreen, TableEditorScreen
-from sql_table_swiss_knife.tui.widgets import DataGrid, InspectorPanel
+from mssql_manager_tui.domain.catalog import TableSummary
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.screens import CellEditorScreen, TableEditorScreen
+from mssql_manager_tui.tui.widgets import DataGrid, InspectorPanel
 from tests.tui.conftest import (
     AUDIT,
     COUNTRY,

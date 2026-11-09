@@ -4,8 +4,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from sql_table_swiss_knife import providers
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui import providers
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     ForeignKey,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from tests.fakes import FakeProvider
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     ChangeKind,
     Column,
@@ -20,15 +20,15 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
-from sql_table_swiss_knife.services import ChangeService, ConnectionService
-from sql_table_swiss_knife.services.clipboard import (
+from mssql_manager_tui.services import ChangeService, ConnectionService
+from mssql_manager_tui.services.clipboard import (
     PasteMode,
     PastePlan,
     PasteTarget,
     parse_block,
     plan_paste,
 )
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore
 
 COUNTRY = Table(
     schema="dbo",

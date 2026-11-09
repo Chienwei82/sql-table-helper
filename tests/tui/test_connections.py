@@ -4,16 +4,16 @@ from textual.app import App
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Static
 
-from sql_table_swiss_knife.providers import ConnectError
-from sql_table_swiss_knife.services import ConnectionState
-from sql_table_swiss_knife.tui.screens import (
+from mssql_manager_tui.providers import ConnectError
+from mssql_manager_tui.services import ConnectionState
+from mssql_manager_tui.tui.screens import (
     ConfirmScreen,
     ConnectionsScreen,
     DatabasePickerScreen,
     ProfileEditScreen,
     TableBrowserScreen,
 )
-from sql_table_swiss_knife.tui.widgets import KeyHints
+from mssql_manager_tui.tui.widgets import KeyHints
 from tests.fakes import FakeProvider
 from tests.tui.conftest import (
     AppFactory,

@@ -7,10 +7,9 @@ they are tested directly and exhaustively — no database, no app (NFR-5).
 from pathlib import Path
 
 import pytest
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, make_profile
 
-from sql_table_swiss_knife.domain import (
-    AuthMode,
+from mssql_manager_tui.domain import (
     Column,
     ConnectionProfile,
     PrimaryKey,
@@ -18,15 +17,15 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     TableSummary,
 )
-from sql_table_swiss_knife.providers import MetadataError
-from sql_table_swiss_knife.services import (
+from mssql_manager_tui.providers import MetadataError
+from mssql_manager_tui.services import (
     CatalogService,
     ConnectionService,
     filter_summaries,
     group_by_schema,
     needs_filter_prompt,
 )
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore
 
 COUNTRY = TableSummary("dbo", "Country", TableKind.BASE_TABLE, has_primary_key=True)
 ORDER = TableSummary(
@@ -39,14 +38,7 @@ ALL_SUMMARIES = (COUNTRY, ORDER, AUDIT, CUSTOMER_VIEW)
 
 
 def _profile() -> ConnectionProfile:
-    return ConnectionProfile(
-        name="catalog",
-        provider="fake",
-        host="localhost",
-        database="test",
-        username="sa",
-        auth=AuthMode.SQL,
-    )
+    return make_profile(name="catalog")
 
 
 def _table(name: str = "Country") -> Table:

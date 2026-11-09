@@ -14,15 +14,15 @@ from textual.events import Paste
 from textual.pilot import Pilot
 from textual.widgets import Input, Static
 
-from sql_table_swiss_knife.domain.catalog import TableSummary
-from sql_table_swiss_knife.services import ChangeService
-from sql_table_swiss_knife.storage import ProfileStore, Settings, SettingsStore
-from sql_table_swiss_knife.tui.screens import (
+from mssql_manager_tui.domain.catalog import TableSummary
+from mssql_manager_tui.services import ChangeService
+from mssql_manager_tui.storage import ProfileStore, Settings, SettingsStore
+from mssql_manager_tui.tui.screens import (
     PastePreviewScreen,
     PathPromptScreen,
     TableEditorScreen,
 )
-from sql_table_swiss_knife.tui.widgets import DataGrid
+from mssql_manager_tui.tui.widgets import DataGrid
 from tests.tui.conftest import SAMPLE_TABLES, AppFactory, active_screen
 
 SETTLE = 6

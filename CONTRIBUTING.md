@@ -13,7 +13,7 @@ summary of the same thing.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-manager --version
+uv run mssql-manager-tui --version
 ```
 
 Requires Python 3.14 (see `.python-version`). [`uv`](https://docs.astral.sh/uv/) manages
@@ -74,7 +74,7 @@ Rationale for all of these: [AGENTS.md](AGENTS.md) and
 - Visual changes are covered by SVG snapshots. If you change a screen's appearance on
   purpose, regenerate with `pytest --snapshot-update` **and review the diff** — stale
   snapshots are worse than none.
-- Integration tests (`pytest -m live`) need `SWISSKNIFE_TEST_DB_URL`; they skip
+- Integration tests (`pytest -m live`) need `MSSQL_MANAGER_TEST_DB_URL`; they skip
   themselves otherwise. They are not required for a contribution.
 
 ## Style

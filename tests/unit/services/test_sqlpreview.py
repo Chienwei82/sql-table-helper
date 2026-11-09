@@ -11,10 +11,10 @@ behaviour is asserted here without a terminal. The three questions these tests k
 
 import pytest
 
-from sql_table_swiss_knife.domain.catalog import Column, PrimaryKey, Table, TableKind
-from sql_table_swiss_knife.domain.changes import ChangeKind, PendingChange
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
-from sql_table_swiss_knife.services.sqlpreview import (
+from mssql_manager_tui.domain.catalog import Column, PrimaryKey, Table, TableKind
+from mssql_manager_tui.domain.changes import ChangeKind, PendingChange
+from mssql_manager_tui.providers.mssql import TSqlDialect
+from mssql_manager_tui.services.sqlpreview import (
     PREVIEW_ONLY_NOTE,
     AppliedRun,
     RowAction,

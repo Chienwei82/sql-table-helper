@@ -16,7 +16,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from sql_table_swiss_knife.infra.clipboard import (
+from mssql_manager_tui.infra.clipboard import (
     ClipboardBackend,
     ClipboardService,
     CommandRunner,

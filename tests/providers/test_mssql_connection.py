@@ -5,9 +5,9 @@ import struct
 
 import pytest
 
-from sql_table_swiss_knife.domain import AuthMode, ConnectionOptions, ConnectionProfile
-from sql_table_swiss_knife.providers import AuthError, ConnectError, MetadataError, QueryError
-from sql_table_swiss_knife.providers.mssql.connection import (
+from mssql_manager_tui.domain import AuthMode, ConnectionOptions, ConnectionProfile
+from mssql_manager_tui.providers import AuthError, ConnectError, MetadataError, QueryError
+from mssql_manager_tui.providers.mssql.connection import (
     _DATETIMEOFFSET_FORMAT,
     build_connection_string,
     decode_datetimeoffset,
@@ -15,8 +15,8 @@ from sql_table_swiss_knife.providers.mssql.connection import (
     fetch_all,
     sanitize_connection_string,
 )
-from sql_table_swiss_knife.providers.mssql.errors import map_pyodbc_error, sanitize_driver_message
-from sql_table_swiss_knife.providers.mssql.metadata import COLUMNS_SQL, column_from_row
+from mssql_manager_tui.providers.mssql.errors import map_pyodbc_error, sanitize_driver_message
+from mssql_manager_tui.providers.mssql.metadata import COLUMNS_SQL, column_from_row
 
 SECRET = "sup3r-s3cret"
 
@@ -27,7 +27,7 @@ def _sql_profile(**overrides: object) -> ConnectionProfile:
         "provider": "mssql",
         "host": "localhost",
         "port": 1433,
-        "database": "SwissKnifeSample",
+        "database": "MssqlManagerSample",
         "auth": AuthMode.SQL,
         "username": "sa",
         "options": ConnectionOptions(trust_server_certificate=True),
@@ -40,7 +40,7 @@ def test_sql_auth_connection_string() -> None:
     text = build_connection_string(_sql_profile(), SECRET)
     assert "DRIVER=ODBC Driver 18 for SQL Server" in text
     assert "SERVER=localhost,1433" in text
-    assert "DATABASE=SwissKnifeSample" in text
+    assert "DATABASE=MssqlManagerSample" in text
     assert "UID=sa" in text
     assert "PWD=sup3r-s3cret" in text
     assert "TrustServerCertificate=yes" in text
@@ -148,7 +148,7 @@ def test_a_value_containing_a_brace_round_trips_through_the_splitter() -> None:
     design — so the check is behavioural: the masked output must not contain the value,
     and the non-secret keywords must survive intact.
     """
-    from sql_table_swiss_knife.providers.mssql.connection import _split_chunks
+    from mssql_manager_tui.providers.mssql.connection import _split_chunks
 
     text = build_connection_string(_sql_profile(), "a;b}c")
     chunks = _split_chunks(text)

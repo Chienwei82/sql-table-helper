@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     ChangeKind,
     Column,
@@ -25,11 +25,11 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     TableRef,
 )
-from sql_table_swiss_knife.providers import ApplyOptions, get_provider
-from sql_table_swiss_knife.providers.errors import ConnectError
-from sql_table_swiss_knife.providers.mssql.dialect import TSqlDialect
-from sql_table_swiss_knife.providers.mssql.errors import map_pyodbc_error
-from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider, bindable, to_positional
+from mssql_manager_tui.providers import ApplyOptions, get_provider
+from mssql_manager_tui.providers.errors import ConnectError
+from mssql_manager_tui.providers.mssql.dialect import TSqlDialect
+from mssql_manager_tui.providers.mssql.errors import map_pyodbc_error
+from mssql_manager_tui.providers.mssql.provider import MssqlProvider, bindable, to_positional
 
 from .test_mssql_connection import _RealShapePyodbcError
 
@@ -39,8 +39,8 @@ from .test_mssql_connection import _RealShapePyodbcError
 RESPONSES: dict[str, list[dict[str, Any]]] = {
     "FROM sys.databases": [
         {
-            "database_name": "SwissKnifeSample",
-            "current_database": "SwissKnifeSample",
+            "database_name": "MssqlManagerSample",
+            "current_database": "MssqlManagerSample",
             "database_id": 5,
         },
     ],
@@ -190,7 +190,7 @@ RESPONSES: dict[str, list[dict[str, Any]]] = {
             "server_name": "SQL01",
             "server_version": "16.0.4105.2",
             "edition": "Developer Edition",
-            "database_name": "SwissKnifeSample",
+            "database_name": "MssqlManagerSample",
         },
     ],
     "SELECT [RegionId]": [
@@ -297,7 +297,7 @@ def profile() -> ConnectionProfile:
         provider="mssql",
         host="localhost",
         port=1433,
-        database="SwissKnifeSample",
+        database="MssqlManagerSample",
         auth=AuthMode.SQL,
         username="sa",
         options=ConnectionOptions(trust_server_certificate=True),
@@ -314,7 +314,7 @@ async def test_connect_uses_the_built_connection_string(
     conn = await provider.connect(profile, "pw")
     assert conn.provider_name == "mssql"
     assert conn.server == "localhost,1433"
-    assert conn.database == "SwissKnifeSample"
+    assert conn.database == "MssqlManagerSample"
     assert conn.closed is False
     assert "PWD=pw" in fake_pyodbc.connections[0].connection_string
     assert "TrustServerCertificate=yes" in fake_pyodbc.connections[0].connection_string
@@ -329,9 +329,7 @@ async def test_connect_enables_autocommit(
     leaks its transaction instead of unwinding, so the next statement sees stale locks.
     """
     module = FakePyodbc()
-    monkeypatch.setattr(
-        "sql_table_swiss_knife.providers.mssql.provider.import_pyodbc", lambda: module
-    )
+    monkeypatch.setattr("mssql_manager_tui.providers.mssql.provider.import_pyodbc", lambda: module)
 
     await MssqlProvider().connect(profile, "pw")
 
@@ -341,7 +339,7 @@ async def test_connect_enables_autocommit(
 async def test_connect_closes_runner_on_failure(
     monkeypatch: pytest.MonkeyPatch, profile: ConnectionProfile
 ) -> None:
-    from sql_table_swiss_knife.providers import AuthError
+    from mssql_manager_tui.providers import AuthError
 
     module = FakePyodbc()
 
@@ -370,7 +368,7 @@ async def test_test_connection_returns_server_info(
     info = await MssqlProvider().test_connection(profile, "pw")
     assert info["server_name"] == "SQL01"
     assert info["edition"] == "Developer Edition"
-    assert info["database_name"] == "SwissKnifeSample"
+    assert info["database_name"] == "MssqlManagerSample"
 
 
 # -- catalog ------------------------------------------------------------------
@@ -380,7 +378,7 @@ async def test_list_databases(fake_pyodbc: FakePyodbc, profile: ConnectionProfil
     provider = MssqlProvider()
     conn = await provider.connect(profile, "pw")
     databases = await provider.list_databases(conn)
-    assert [(d.name, d.is_current) for d in databases] == [("SwissKnifeSample", True)]
+    assert [(d.name, d.is_current) for d in databases] == [("MssqlManagerSample", True)]
 
 
 async def test_list_tables(fake_pyodbc: FakePyodbc, profile: ConnectionProfile) -> None:
@@ -445,7 +443,7 @@ async def test_get_table_metadata_missing_object(
     fake_pyodbc: FakePyodbc, profile: ConnectionProfile
 ) -> None:
     """The object-lookup query returns no rows for an unknown name -> MetadataError."""
-    from sql_table_swiss_knife.providers import MetadataError
+    from mssql_manager_tui.providers import MetadataError
 
     RESPONSES["o.object_id = OBJECT_ID(?)"] = []  # object not found
     try:
@@ -499,7 +497,7 @@ async def test_fetch_rows_orders_by_identity_and_pages(
 
 
 def test_provider_is_registered_and_satisfies_the_protocol() -> None:
-    from sql_table_swiss_knife.providers import DatabaseProvider
+    from mssql_manager_tui.providers import DatabaseProvider
 
     provider = get_provider("mssql")
     assert isinstance(provider, MssqlProvider)
@@ -622,7 +620,7 @@ async def test_identity_insert_is_off_by_default_so_identity_values_are_rejected
 async def test_execute_changes_refuses_a_table_without_a_row_identity(
     fake_pyodbc: FakePyodbc, profile: ConnectionProfile
 ) -> None:
-    from sql_table_swiss_knife.providers import QueryError
+    from mssql_manager_tui.providers import QueryError
 
     provider = MssqlProvider()
     conn = await provider.connect(profile, "pw")
@@ -648,7 +646,7 @@ async def test_execute_changes_does_not_emit_identity_insert_on_a_natural_key_ta
     there an INSERT", so Apply raised an error for a script the app had shown as valid —
     exactly the drift the SQL panel exists to prevent.
     """
-    from sql_table_swiss_knife.domain import PrimaryKey
+    from mssql_manager_tui.domain import PrimaryKey
 
     provider = MssqlProvider()
     conn = await provider.connect(profile, "pw")

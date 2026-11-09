@@ -7,7 +7,7 @@ loaded can still be found by a filter (S-8).
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     Column,
     FilterOp,
     PrimaryKey,
@@ -16,8 +16,8 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
-from sql_table_swiss_knife.services.view import (
+from mssql_manager_tui.providers.mssql import TSqlDialect
+from mssql_manager_tui.services.view import (
     FilterMode,
     GridView,
     QuickFilter,

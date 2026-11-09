@@ -10,10 +10,9 @@ from pathlib import Path
 
 import pytest
 from tests.conftest import COUNTRY_COLUMNS
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, make_profile
 
-from sql_table_swiss_knife.domain import (
-    AuthMode,
+from mssql_manager_tui.domain import (
     ChangeKind,
     Column,
     ConnectionProfile,
@@ -22,16 +21,16 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
-from sql_table_swiss_knife.providers.dialect import ErrorFacts
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
-from sql_table_swiss_knife.services import (
+from mssql_manager_tui.providers.dialect import ErrorFacts
+from mssql_manager_tui.providers.mssql import TSqlDialect
+from mssql_manager_tui.services import (
     ApplyError,
     CellStatus,
     ChangeService,
     ConnectionService,
     map_database_error,
 )
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore
 
 #: Error wording is the dialect's job; these tests pin SQL Server's.
 DIALECT = TSqlDialect()
@@ -75,15 +74,7 @@ GERMANY: dict[str, object] = {
 
 
 def _profile() -> ConnectionProfile:
-    return ConnectionProfile(
-        name="catalog",
-        provider="fake",
-        host="localhost",
-        port=1433,
-        database="test",
-        username="sa",
-        auth=AuthMode.SQL,
-    )
+    return make_profile(name="catalog")
 
 
 async def _service(
@@ -550,7 +541,7 @@ def test_the_column_named_in_the_message_wins(message: str, expected_column: str
 
 
 def test_a_delete_error_has_no_guessed_column() -> None:
-    from sql_table_swiss_knife.domain import PendingChange, TableRef
+    from mssql_manager_tui.domain import PendingChange, TableRef
 
     delete = PendingChange(
         kind=ChangeKind.DELETE,

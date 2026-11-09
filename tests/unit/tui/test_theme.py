@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from sql_table_swiss_knife.storage import Settings, SettingsError, SettingsStore
-from sql_table_swiss_knife.tui.theme import (
+from mssql_manager_tui.storage import Settings, SettingsError, SettingsStore
+from mssql_manager_tui.tui.theme import (
     DEFAULT_THEME,
     SEMANTIC_ROLES,
     THEMES,

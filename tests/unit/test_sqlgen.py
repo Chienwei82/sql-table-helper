@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     ChangeKind,
     FetchSpec,
     FilterOp,
@@ -14,7 +14,7 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableRef,
 )
-from sql_table_swiss_knife.providers import (
+from mssql_manager_tui.providers import (
     ApplyOptions,
     build_delete,
     build_insert,
@@ -28,7 +28,7 @@ from sql_table_swiss_knife.providers import (
     needs_identity_insert,
     sort_for_apply,
 )
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
+from mssql_manager_tui.providers.mssql import TSqlDialect
 
 TABLE = TableRef(schema="dbo", name="Country")
 
@@ -45,7 +45,7 @@ def composite_table() -> Table:
     Keyset paging only engages for an ascending sort over *exactly* the identity
     columns, so the single-key fixtures could never reach the multi-column path.
     """
-    from sql_table_swiss_knife.domain import Column, PrimaryKey, TableKind
+    from mssql_manager_tui.domain import Column, PrimaryKey, TableKind
 
     return Table(
         schema="dbo",
@@ -505,7 +505,7 @@ def test_keyset_marker_order_matches_the_rendered_predicate(
     This is the invariant that made the real driver reject the statement with "The SQL
     contains 3 parameter markers, but 2 parameters were supplied".
     """
-    from sql_table_swiss_knife.providers.mssql.provider import to_positional
+    from mssql_manager_tui.providers.mssql.provider import to_positional
 
     select = build_select(
         dialect,

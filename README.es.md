@@ -1,4 +1,4 @@
-# sql-table-manager
+# mssql-manager-tui
 
 **Edita tablas de catálogo sin escribir SQL — y siempre ves el SQL que ejecuta.**
 
@@ -115,7 +115,7 @@ lectura.
 git clone https://github.com/Chienwei82/sql-table-helper.git
 cd sql-table-helper
 uv sync
-uv run sql-table-manager
+uv run mssql-manager-tui
 ```
 
 Requiere Python 3.14. Para conectarte también necesitas un **gestor de drivers ODBC** y el
@@ -126,7 +126,7 @@ intercepta con una CA privada hace fallar `uv sync` de un modo que `pip` no tend
 Consulta [docs/CORPORATE_PROXY.md](docs/CORPORATE_PROXY.md) y la vía con `uv pip` de abajo.
 
 > El paquete **aún no está publicado en PyPI**, así que la línea `uv tool install
-> sql-table-manager` que antes estaba aquí no funciona. Instala desde una copia del
+> mssql-manager-tui` que antes estaba aquí no funciona. Instala desde una copia del
 > repositorio, o genera un wheel con `uv build` e instala el resultado.
 
 ### Instalar con `uv pip` en lugar de `uv sync`
@@ -140,7 +140,7 @@ source .venv/bin/activate                # Windows: .venv\Scripts\activate
 uv pip install -e .                      # solo dependencias de ejecución
 uv pip install -e . --group dev          # + pytest, ruff, mypy, import-linter
 uv pip install -e ".[clipboard]"         # + el mejor backend de portapapeles
-sql-table-manager                    # o el alias corto: stm
+mssql-manager-tui                    # o el alias corto: stm
 ```
 
 Dos cosas que conviene saber, porque si no te van a dar un disgusto:
@@ -165,7 +165,7 @@ También se admite una compilación de **un solo archivo** para máquinas restri
 dejar la aplicación en un servidor sin tocar su Python:
 
 ```bash
-uv run scripts/build_standalone.py        # escribe dist/sql-table-manager (un archivo)
+uv run scripts/build_standalone.py        # escribe dist/mssql-manager-tui (un archivo)
 ```
 
 Usa [PyInstaller](https://pyinstaller.org) (declarado como extra opcional `standalone`) y
@@ -182,8 +182,8 @@ uv run pytest -m live       # pruebas de integración (necesitan el servidor doc
 uv run ruff check .         # lint
 uv run ruff format --check .  # comprobación de formato
 uv run mypy                 # comprobación de tipos estricta
-uv run sql-table-manager --version
-uv run sql-table-manager   # iniciar la TUI (salir: ctrl+q)
+uv run mssql-manager-tui --version
+uv run mssql-manager-tui   # iniciar la TUI (salir: ctrl+q)
 ```
 
 ## Uso de la TUI
@@ -232,8 +232,8 @@ En la primera ejecución se escribe una plantilla `keybindings.toml` vacía en e
 de configuración. Muestra la ruta con `--print-config-dir`, edita el archivo, reinicia:
 
 ```bash
-uv run sql-table-manager --print-config-dir
-# → /home/you/.config/sql-table-manager
+uv run mssql-manager-tui --print-config-dir
+# → /home/you/.config/mssql-manager-tui
 ```
 
 ```toml
@@ -339,7 +339,7 @@ Si omites `read_only` decide el entorno: **producción se abre en solo lectura**
 se abre con escritura. Un perfil de producción que pueda escribir por accidente es el fallo
 que esto evita, así que la respuesta segura es el valor por defecto y activar la escritura
 es siempre un acto explícito y visible. `f5` lo alterna para la sesión; la insignia cambia
-de inmediato. `sql-table-manager --read-only` fuerza solo lectura para todo el proceso y
+de inmediato. `mssql-manager-tui --read-only` fuerza solo lectura para todo el proceso y
 **bloquea el alternador** — una sesión de solo lectura de la que no puedes salir por
 casualidad.
 
@@ -504,9 +504,9 @@ código.
 ## Perfiles de conexión
 
 Los perfiles viven en el directorio de configuración de platformdirs (con
-`SWISSKNIFE_CONFIG_DIR` se sobrescribe) como `profiles.toml`. **Las contraseñas nunca se
+`MSSQL_MANAGER_CONFIG_DIR` se sobrescribe) como `profiles.toml`. **Las contraseñas nunca se
 escriben en ese archivo** — viven en el almacén de claves del sistema operativo (servicio
-`sql-table-manager`, cuenta = `secret_ref`) o se piden en cada sesión cuando no hay
+`mssql-manager-tui`, cuenta = `secret_ref`) o se piden en cada sesión cuando no hay
 ningún backend de keyring disponible:
 
 ```toml
@@ -515,7 +515,7 @@ name = "local"
 provider = "mssql"
 host = "localhost"
 port = 1433
-database = "SwissKnifeSample"
+database = "MssqlManagerSample"
 auth = "sql"                  # o "integrated" para autenticación integrada de Windows
 username = "sa"
 secret_ref = "local@localhost"   # cuenta del keyring, NO la contraseña
@@ -538,8 +538,8 @@ docker compose up -d          # arranca SQL Server y luego carga init/01_sample_
 docker compose down -v        # borrar
 ```
 
-Conexión: `localhost,1433`, usuario `sa`, contraseña `SwissKnife!2022_Test` (se sobrescribe
-con `MSSQL_SA_PASSWORD`), base de datos `SwissKnifeSample`.
+Conexión: `localhost,1433`, usuario `sa`, contraseña `MssqlManager!2022_Test` (se sobrescribe
+con `MSSQL_SA_PASSWORD`), base de datos `MssqlManagerSample`.
 
 Ejecutar pyodbc en Linux necesita además `unixODBC` y el Microsoft ODBC Driver 18.
 
@@ -549,9 +549,9 @@ Un comando temporal del Hito 2 que imprime los metadatos introspeccionados como 
 Rich, para que puedas comprobar la capa `sys.*` sin lanzar la TUI:
 
 ```bash
-uv run sql-table-manager inspect <profile> dbo.Region     # metadatos completos
-uv run sql-table-manager inspect <profile> x --list       # tablas + recuentos de filas
-uv run sql-table-manager inspect <profile> x --databases  # bases de datos
+uv run mssql-manager-tui inspect <profile> dbo.Region     # metadatos completos
+uv run mssql-manager-tui inspect <profile> x --list       # tablas + recuentos de filas
+uv run mssql-manager-tui inspect <profile> x --databases  # bases de datos
 ```
 
 Resuelve la contraseña desde el keyring, preguntando si hace falta. Se espera que este
@@ -561,7 +561,7 @@ forma interactiva.
 ## Estructura
 
 ```
-src/sql_table_swiss_knife/
+src/mssql_manager_tui/
   domain/      modelos puros — ConnectionProfile, Table, PendingChange, RowKey (sin E/S)
   providers/   protocolos DatabaseProvider + SqlDialect, generación de SQL compartida,
                registro de plugins y mssql/ (cadena de conexión, mapeo de errores,
@@ -589,7 +589,7 @@ hace fallar la compilación en lugar de una revisión de código.
 ```bash
 uv run pytest                    # todo; las pruebas live se omiten solas
 uv run pytest tests/unit -q      # rápido: sin terminal, sin base de datos
-uv run pytest --cov=sql_table_swiss_knife --cov-report=term-missing
+uv run pytest --cov=mssql_manager_tui --cov-report=term-missing
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                      # estricto, src + tests
 ```
@@ -634,8 +634,8 @@ completitud:
   El `.xlsx` en sí no se lee — el CSV exportado desde Excel funciona.
 - **`inspect` es un comando temporal de desarrollo** y se reescribirá o se eliminará.
 - **La migración del cambio de nombre es una copia, no un movimiento, y las contraseñas no
-  se migran.** Un directorio `~/.config/sql-table-swiss-knife` existente se copia al nuevo
-  `sql-table-manager` en el primer arranque — solo para rellenar huecos: un archivo que ya
+  se migran.** Un directorio `~/.config/mssql-manager-tui` existente se copia al nuevo
+  `mssql-manager-tui` en el primer arranque — solo para rellenar huecos: un archivo que ya
   existe con el nombre nuevo gana — pero los secretos del keyring dependen del nombre del
   servicio, así que una contraseña guardada con el nombre antiguo hay que introducirla una
   vez más.
