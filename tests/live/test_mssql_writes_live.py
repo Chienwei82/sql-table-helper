@@ -19,9 +19,9 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import ChangeKind, FetchSpec, PendingChange
-from sql_table_swiss_knife.providers import ApplyOptions, QueryError
-from sql_table_swiss_knife.providers.mssql.provider import CONFLICT_REASON, MssqlProvider
+from mssql_manager_tui.domain import ChangeKind, FetchSpec, PendingChange
+from mssql_manager_tui.providers import ApplyOptions, QueryError
+from mssql_manager_tui.providers.mssql.provider import CONFLICT_REASON, MssqlProvider
 from tests.live.conftest import LiveServer
 
 pytestmark = pytest.mark.live
@@ -391,8 +391,8 @@ async def test_foreign_key_violation_is_sanitized_and_rolls_back(
 
     assert result.committed is False
     assert "FK_Region_Country" in (result.error or "")
-    # The real password never reaches a message. (The database is *named* SwissKnifeSample,
-    # so the driver's own text legitimately contains "SwissKnife" as part of that name.)
+    # The real password never reaches a message. (The database is *named* MssqlManagerSample,
+    # so the driver's own text legitimately contains "MssqlManager" as part of that name.)
     assert live_server.password not in (result.error or "")
     assert "PWD=" not in (result.error or "").upper()
 
@@ -706,7 +706,7 @@ async def test_empty_change_list_commits_nothing(live_connection: Any) -> None:
 
 async def test_apply_order_is_delete_then_insert(live_connection: Any, clean_slate: None) -> None:
     """FK-friendly ordering, asserted both on the builder and on the executed result."""
-    from sql_table_swiss_knife.providers.sqlgen import sort_for_apply
+    from mssql_manager_tui.providers.sqlgen import sort_for_apply
 
     provider = MssqlProvider()
     table = await table_of(live_connection, "dbo", "Simple")

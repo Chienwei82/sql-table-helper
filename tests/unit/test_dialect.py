@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
+from mssql_manager_tui.providers.mssql import TSqlDialect
 
 
 @pytest.fixture

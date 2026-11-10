@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     ConnectionOptions,
     ConnectionProfile,
@@ -23,9 +23,9 @@ from sql_table_swiss_knife.domain import (
     RowFilter,
     SortKey,
 )
-from sql_table_swiss_knife.providers import AuthError, ConnectError, MetadataError
-from sql_table_swiss_knife.providers.mssql.connection import build_connection_string
-from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+from mssql_manager_tui.providers import AuthError, ConnectError, MetadataError
+from mssql_manager_tui.providers.mssql.connection import build_connection_string
+from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 from tests.live.conftest import LiveServer
 
 pytestmark = pytest.mark.live
@@ -123,7 +123,7 @@ async def test_integrated_auth_rejects_a_password(live_server: LiveServer) -> No
 
 async def test_connection_string_carries_the_expected_options(live_server: LiveServer) -> None:
     """The exact string the driver receives — the one thing a fake driver never validates."""
-    from sql_table_swiss_knife.providers.mssql.connection import sanitize_connection_string
+    from mssql_manager_tui.providers.mssql.connection import sanitize_connection_string
 
     string = build_connection_string(live_server.profile(), live_server.password)
     assert "DRIVER=ODBC Driver 18 for SQL Server" in string
@@ -313,14 +313,14 @@ async def test_composite_keyset_paging_walks_every_row_exactly_once(live_connect
 
 
 async def test_query_against_a_missing_object_raises_metadata_error(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers import QueryError
+    from mssql_manager_tui.providers import QueryError
 
     with pytest.raises((MetadataError, QueryError)):
         await live_connection.afetch("SELECT * FROM [dbo].[NoSuchTable_12345]")
 
 
 async def test_syntax_error_is_reported_not_swallowed(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers import ProviderError
+    from mssql_manager_tui.providers import ProviderError
 
     with pytest.raises(ProviderError):
         await live_connection.afetch("SELEKT 1")

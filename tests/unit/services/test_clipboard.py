@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     PrimaryKey,
@@ -22,7 +22,7 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     UniqueConstraint,
 )
-from sql_table_swiss_knife.services.clipboard import (
+from mssql_manager_tui.services.clipboard import (
     CellPlan,
     ClipboardBlock,
     ClipboardOptions,

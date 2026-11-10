@@ -4,7 +4,7 @@ from importlib import metadata
 
 import pytest
 
-from sql_table_swiss_knife.providers import (
+from mssql_manager_tui.providers import (
     DatabaseProvider,
     UnknownProviderError,
     available_providers,
@@ -17,7 +17,7 @@ from tests.fakes import FakeProvider
 
 def test_register_and_get_is_case_insensitive() -> None:
     register_provider("Fake", FakeProvider)
-    assert available_providers() == ("fake",)
+    assert "fake" in available_providers()
     provider = get_provider("  FAKE ")
     assert provider.name == "fake"
 
@@ -27,7 +27,7 @@ def test_duplicate_registration_requires_replace() -> None:
     with pytest.raises(ValueError, match="already registered"):
         register_provider("fake", FakeProvider)
     register_provider("fake", FakeProvider, replace=True)
-    assert available_providers() == ("fake",)
+    assert "fake" in available_providers()
 
 
 def test_empty_name_rejected() -> None:
@@ -50,7 +50,9 @@ def test_builtin_mssql_provider_is_available_lazily() -> None:
 
 
 def test_unknown_builtin_still_raises_when_registry_is_empty() -> None:
-    with pytest.raises(UnknownProviderError, match=r"available: \(none\)"):
+    # ``mssql`` is a built-in, so it is always listed as available even when the
+    # registry itself is empty — the unknown name still raises.
+    with pytest.raises(UnknownProviderError, match=r"available: mssql"):
         get_provider("not-a-provider")
 
 

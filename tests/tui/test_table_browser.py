@@ -3,15 +3,15 @@
 from textual.app import App
 from textual.widgets import Input
 
-from sql_table_swiss_knife.domain import Table
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import (
+from mssql_manager_tui.domain import Table
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.screens import (
     LargeTablePromptScreen,
     QuickFilterScreen,
     TableBrowserScreen,
     TableEditorScreen,
 )
-from sql_table_swiss_knife.tui.widgets import DataGrid, InspectorPanel, TableTree
+from mssql_manager_tui.tui.widgets import DataGrid, InspectorPanel, TableTree
 from tests.fakes import FakeProvider
 from tests.tui.conftest import AUDIT, SAMPLE_TABLES, AppFactory, active_screen, large_table
 

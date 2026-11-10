@@ -6,17 +6,17 @@ from textual.app import App
 from textual.command import CommandPalette
 from textual.widgets import OptionList
 
-from sql_table_swiss_knife.storage import ProfileStore, Settings, SettingsStore
-from sql_table_swiss_knife.tui.app import SwissKnifeApp
-from sql_table_swiss_knife.tui.commands import ActionProvider
-from sql_table_swiss_knife.tui.screens import ConnectionsScreen, TableBrowserScreen
-from sql_table_swiss_knife.tui.theme import DEFAULT_THEME, SEMANTIC_ROLES, theme_names
+from mssql_manager_tui.storage import ProfileStore, Settings, SettingsStore
+from mssql_manager_tui.tui.app import MssqlManagerApp
+from mssql_manager_tui.tui.commands import ActionProvider
+from mssql_manager_tui.tui.screens import ConnectionsScreen, TableBrowserScreen
+from mssql_manager_tui.tui.theme import DEFAULT_THEME, SEMANTIC_ROLES, theme_names
 from tests.tui.conftest import AppFactory, active_screen
 
 
 def _settings(app: App[None]) -> SettingsStore:
     """The settings store of a running app (an attribute only our app class has)."""
-    return cast("SwissKnifeApp", app).settings_store
+    return cast("MssqlManagerApp", app).settings_store
 
 
 async def test_all_themes_are_registered_at_startup(app_factory: AppFactory) -> None:
@@ -148,10 +148,10 @@ async def test_only_one_command_provider_is_registered(app_factory: AppFactory) 
     rendered in whatever order the tasks happened to finish. That made the palette
     snapshot mismatch on roughly half of all runs. One provider means one order.
     """
-    assert len(SwissKnifeApp.COMMANDS) == 1, (
-        f"expected a single command provider, got {SwissKnifeApp.COMMANDS}"
+    assert len(MssqlManagerApp.COMMANDS) == 1, (
+        f"expected a single command provider, got {MssqlManagerApp.COMMANDS}"
     )
-    assert ActionProvider in SwissKnifeApp.COMMANDS
+    assert ActionProvider in MssqlManagerApp.COMMANDS
 
 
 async def test_the_palette_serves_the_system_commands_from_our_provider(

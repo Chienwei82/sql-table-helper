@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from tests.fakes import FakeConnection, FakeProvider
 
-from sql_table_swiss_knife.domain import AuthMode, ConnectionProfile
-from sql_table_swiss_knife.providers import AuthError, ConnectError
-from sql_table_swiss_knife.services import ConnectionService, ConnectionState, duplicate_profile
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileError, ProfileStore
+from mssql_manager_tui.domain import AuthMode, ConnectionProfile
+from mssql_manager_tui.providers import AuthError, ConnectError
+from mssql_manager_tui.services import ConnectionService, ConnectionState, duplicate_profile
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileError, ProfileStore
 
 
 class FailingProvider(FakeProvider):

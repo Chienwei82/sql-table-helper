@@ -2,7 +2,7 @@
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     ConnectionOptions,
     ConnectionProfile,
@@ -52,7 +52,7 @@ def test_connection_result_validation() -> None:
     result = ConnectionResult(
         server_version="16.0.4105",
         server_name="SQL01",
-        database="SwissKnifeSample",
+        database="MssqlManagerSample",
         latency_ms=12,
         auth_used=AuthMode.SQL,
     )

@@ -6,10 +6,9 @@ best-guess description column — because a raw identifier in a cell tells a hum
 
 from pathlib import Path
 
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, make_profile
 
-from sql_table_swiss_knife.domain import (
-    AuthMode,
+from mssql_manager_tui.domain import (
     Column,
     ConnectionProfile,
     ForeignKey,
@@ -18,10 +17,10 @@ from sql_table_swiss_knife.domain import (
     Table,
     TableKind,
 )
-from sql_table_swiss_knife.providers.mssql import TSqlDialect
-from sql_table_swiss_knife.services import CatalogService, ConnectionService, LookupService
-from sql_table_swiss_knife.services.lookup import description_column, lookup_predicates
-from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore
+from mssql_manager_tui.providers.mssql import TSqlDialect
+from mssql_manager_tui.services import CatalogService, ConnectionService, LookupService
+from mssql_manager_tui.services.lookup import description_column, lookup_predicates
+from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore
 
 #: LIKE escaping is the dialect's job; these tests pin one dialect's syntax.
 DIALECT = TSqlDialect()
@@ -89,15 +88,7 @@ FK = _fk("FK_Order_Country", "CountryCode", "Country", "Code")
 
 
 def _profile() -> ConnectionProfile:
-    return ConnectionProfile(
-        name="catalog",
-        provider="fake",
-        host="localhost",
-        port=1433,
-        database="test",
-        username="sa",
-        auth=AuthMode.SQL,
-    )
+    return make_profile(name="catalog")
 
 
 async def _lookup(tmp_path: Path, table: Table, rows: list[dict[str, object]]) -> LookupService:

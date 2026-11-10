@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from sql_table_swiss_knife.domain import Column, PrimaryKey, Table, TableKind
-from sql_table_swiss_knife.services.clipboard import ClipboardOptions, PasteTarget, plan_paste
-from sql_table_swiss_knife.services.transfer import (
+from mssql_manager_tui.domain import Column, PrimaryKey, Table, TableKind
+from mssql_manager_tui.services.clipboard import ClipboardOptions, PasteTarget, plan_paste
+from mssql_manager_tui.services.transfer import (
     TransferError,
     export_rows,
     read_block,

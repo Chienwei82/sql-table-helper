@@ -2,7 +2,7 @@
 
 import pytest
 
-from sql_table_swiss_knife.domain import TableRef, validate_identifier
+from mssql_manager_tui.domain import TableRef, validate_identifier
 
 
 def test_validate_identifier_accepts_normal_name() -> None:

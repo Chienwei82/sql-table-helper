@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from sql_table_swiss_knife.domain import ReferentialAction, TableKind
-from sql_table_swiss_knife.providers import MetadataError
+from mssql_manager_tui.domain import ReferentialAction, TableKind
+from mssql_manager_tui.providers import MetadataError
 from tests.live.conftest import LiveServer
 
 pytestmark = pytest.mark.live
@@ -31,19 +31,19 @@ async def test_connect_and_test_connection(live_server: LiveServer, mssql_provid
 
 
 async def test_list_databases_contains_sample(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     provider = MssqlProvider()
     databases = await provider.list_databases(live_connection)
     names = [database.name for database in databases]
-    assert "SwissKnifeSample" in names
+    assert "MssqlManagerSample" in names
     current = [database.name for database in databases if database.is_current]
-    assert current == ["SwissKnifeSample"]
+    assert current == ["MssqlManagerSample"]
     assert "master" not in names  # system databases are filtered out
 
 
 async def test_list_tables_and_views(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     summaries = await MssqlProvider().list_tables(live_connection, "dbo")
     by_name = {f"{s.schema}.{s.name}": s for s in summaries}
@@ -62,7 +62,7 @@ async def test_list_tables_and_views(live_connection: Any) -> None:
 
 
 async def test_list_tables_without_schema_filter(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     summaries = await MssqlProvider().list_tables(live_connection)
     assert len(summaries) >= 5
@@ -83,7 +83,7 @@ async def test_list_tables_without_schema_filter(live_connection: Any) -> None:
 
 
 async def test_metadata_columns_exact_types(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     table = await MssqlProvider().get_table_metadata(live_connection, "dbo", "Country")
     assert table.schema == "dbo"
@@ -112,7 +112,7 @@ async def test_metadata_columns_exact_types(live_connection: Any) -> None:
 
 
 async def test_metadata_keys_and_constraints(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     table = await MssqlProvider().get_table_metadata(live_connection, "dbo", "Country")
     assert table.primary_key is not None
@@ -132,7 +132,7 @@ async def test_metadata_keys_and_constraints(live_connection: Any) -> None:
 
 
 async def test_metadata_foreign_keys_both_directions(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     provider = MssqlProvider()
     region = await provider.get_table_metadata(live_connection, "dbo", "Region")
@@ -154,7 +154,7 @@ async def test_metadata_foreign_keys_both_directions(live_connection: Any) -> No
 
 
 async def test_metadata_identity_computed_and_rowversion(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     region = await MssqlProvider().get_table_metadata(live_connection, "dbo", "Region")
     region_id = region.column("RegionId")
@@ -176,7 +176,7 @@ async def test_metadata_identity_computed_and_rowversion(live_connection: Any) -
 
 
 async def test_metadata_triggers(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     region = await MssqlProvider().get_table_metadata(live_connection, "dbo", "Region")
     (trigger,) = region.triggers
@@ -195,7 +195,7 @@ async def test_metadata_triggers(live_connection: Any) -> None:
 
 
 async def test_metadata_composite_primary_key(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     alias = await MssqlProvider().get_table_metadata(live_connection, "dbo", "RegionAlias")
     assert alias.primary_key is not None
@@ -204,15 +204,15 @@ async def test_metadata_composite_primary_key(live_connection: Any) -> None:
 
 
 async def test_metadata_missing_object_raises(live_connection: Any) -> None:
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     with pytest.raises(MetadataError, match="does not exist"):
         await MssqlProvider().get_table_metadata(live_connection, "dbo", "NoSuchTable")
 
 
 async def test_fetch_rows_paging(live_connection: Any) -> None:
-    from sql_table_swiss_knife.domain import FetchSpec
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.domain import FetchSpec
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     provider = MssqlProvider()
     country = await provider.get_table_metadata(live_connection, "dbo", "Country")
@@ -234,8 +234,8 @@ async def test_fetch_rows_paging(live_connection: Any) -> None:
 
 
 async def test_rowvalues_include_server_managed_columns(live_connection: Any) -> None:
-    from sql_table_swiss_knife.domain import FetchSpec
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlProvider
+    from mssql_manager_tui.domain import FetchSpec
+    from mssql_manager_tui.providers.mssql.provider import MssqlProvider
 
     provider = MssqlProvider()
     region = await provider.get_table_metadata(live_connection, "dbo", "Region")

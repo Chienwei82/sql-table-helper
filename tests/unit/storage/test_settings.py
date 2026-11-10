@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sql_table_swiss_knife.storage.settings import (
+from mssql_manager_tui.storage.settings import (
     DEFAULT_THEME,
     Settings,
     SettingsError,

@@ -1,4 +1,4 @@
-# SPEC — sql-table-manager
+# SPEC — mssql-manager-tui
 
 Status: **Draft v0.1 — awaiting review**
 Companion document: [DESIGN.md](DESIGN.md) (architecture, tech choices, verification report).
@@ -7,7 +7,7 @@ Companion document: [DESIGN.md](DESIGN.md) (architecture, tech choices, verifica
 
 ## 1. Product summary
 
-`sql-table-manager` is a Python 3.14 terminal (TUI) application for **viewing and editing
+`mssql-manager-tui` is a Python 3.14 terminal (TUI) application for **viewing and editing
 rows of database tables that have no CRUD UI** — primarily catalog/lookup tables. Two goals:
 
 1. Let the user edit catalog tables **without writing SQL**.
@@ -277,7 +277,7 @@ Requirement IDs (FR-x.y) are stable references for tests and review.
   full `TableMetadata` (columns/PK/FK/unique/check/trigger) via `sys.*` catalog queries.
 - Row fetch with limit/paging and deterministic order.
 - Provider contract tests run against `FakeProvider` (always) and SQL Server (env-gated:
-  `SWISSKNIFE_TEST_DB_URL`), skipped otherwise.
+  `MSSQL_MANAGER_TEST_DB_URL`), skipped otherwise.
 - Report: driver wheel verification recorded in DESIGN §10 (done).
 
 ### M3 — Connection manager & table picker
@@ -344,9 +344,9 @@ Each item: question — **recommended default** (my pick if you don't care).
   issue #588) and no cp314t wheels. Because the provider abstraction hides the driver, the
   profile could later expose `driver = "pyodbc" | "mssql-python"` — do you want that option in
   v1? **Default: pyodbc only in v1, seam kept open.**
-- **OQ-2 CLI/package naming?** Package `sql_table_swiss_knife`, console script
-  `sql-table-manager`. **Default: also add short alias `stm`.** (Repo folder is currently
-  `sql-table-helper` — rename it? **Default: rename to `sql-table-manager`.**)
+- **OQ-2 CLI/package naming?** Package `mssql_manager_tui`, console script
+  `mssql-manager-tui`. **Default: also add short alias `stm`.** (Repo folder is currently
+  `sql-table-helper` — rename it? **Default: rename to `mssql-manager-tui`.**)
 - **OQ-3 Models: stdlib dataclasses vs pydantic?** — **Default: stdlib frozen dataclasses**
   (zero deps, fast, mypy-strict-friendly; validation is hand-written where needed). Pydantic
   adds runtime weight and a version churn surface we don't need for internal models. Profiles
@@ -378,7 +378,7 @@ Each item: question — **recommended default** (my pick if you don't care).
   switching in v1.**
 - **OQ-10 Live test database** — integration tests need a real SQL Server.
   **Default: `tests/live/docker-compose.yml` with SQL Server 2022 (Developer), tests gated by
-  `SWISSKNIFE_TEST_DB_URL`, skipped when absent.** Tell me if you have a preferred instance
+  `MSSQL_MANAGER_TEST_DB_URL`, skipped when absent.** Tell me if you have a preferred instance
   instead, or whether live tests should simply stay disabled for now.
 - **OQ-11 Supported SQL Server versions** — **Default: SQL Server 2016+ and Azure SQL**
   (metadata queries and syntax avoid 2014-and-older edge cases; ODBC Driver 18 recommended,

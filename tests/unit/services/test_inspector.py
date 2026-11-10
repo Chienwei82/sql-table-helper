@@ -7,7 +7,7 @@ change in wording that loses a *fact* should fail here.
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     ForeignKey,
@@ -19,7 +19,7 @@ from sql_table_swiss_knife.domain import (
     Trigger,
     UniqueConstraint,
 )
-from sql_table_swiss_knife.services.inspector import (
+from mssql_manager_tui.services.inspector import (
     LARGE_TABLE_ROWS,
     ColumnDetail,
     Severity,

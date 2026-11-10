@@ -11,8 +11,8 @@ from typing import ClassVar
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
-from sql_table_swiss_knife.tui.app import SwissKnifeApp
-from sql_table_swiss_knife.tui.keybindings import (
+from mssql_manager_tui.tui.app import MssqlManagerApp
+from mssql_manager_tui.tui.keybindings import (
     ACTIONS,
     GROUP_ORDER,
     ActionId,
@@ -24,8 +24,8 @@ from sql_table_swiss_knife.tui.keybindings import (
     groups,
     verify_against_widgets,
 )
-from sql_table_swiss_knife.tui.keymap import load_keymap, write_template
-from sql_table_swiss_knife.tui.screens import (
+from mssql_manager_tui.tui.keymap import load_keymap, write_template
+from mssql_manager_tui.tui.screens import (
     ConnectionsScreen,
     DatabasePickerScreen,
     TableBrowserScreen,
@@ -34,7 +34,7 @@ from sql_table_swiss_knife.tui.screens import (
 
 #: Every screen that declares bindings the registry documents.
 SCREENS = (
-    SwissKnifeApp,
+    MssqlManagerApp,
     ConnectionsScreen,
     DatabasePickerScreen,
     TableBrowserScreen,
@@ -251,12 +251,12 @@ def test_the_app_writes_the_template_on_first_run(tmp_path: Path) -> None:
     The documented promise is "an empty keybindings.toml appears in the config dir", so
     this asserts the app does it rather than trusting the docstring.
     """
-    from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore, SettingsStore
-    from sql_table_swiss_knife.tui.app import SwissKnifeApp
+    from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore, SettingsStore
+    from mssql_manager_tui.tui.app import MssqlManagerApp
 
     config = tmp_path / "config"
     overrides = config / "keybindings.toml"
-    app = SwissKnifeApp(
+    app = MssqlManagerApp(
         profiles=ProfileStore(config / "profiles.toml"),
         secrets=EphemeralSecretStore(),
         settings=SettingsStore(config / "settings.toml"),
@@ -269,14 +269,14 @@ def test_the_app_writes_the_template_on_first_run(tmp_path: Path) -> None:
 
 def test_a_second_run_does_not_clobber_the_users_keys(tmp_path: Path) -> None:
     """The template is a starting point, not something the app keeps rewriting."""
-    from sql_table_swiss_knife.storage import EphemeralSecretStore, ProfileStore, SettingsStore
-    from sql_table_swiss_knife.tui.app import SwissKnifeApp
+    from mssql_manager_tui.storage import EphemeralSecretStore, ProfileStore, SettingsStore
+    from mssql_manager_tui.tui.app import MssqlManagerApp
 
     config = tmp_path / "config"
     overrides = config / "keybindings.toml"
     overrides.parent.mkdir(parents=True)
     overrides.write_text('[keys]\napply = "ctrl+g"\n', encoding="utf-8")
-    SwissKnifeApp(
+    MssqlManagerApp(
         profiles=ProfileStore(config / "profiles.toml"),
         secrets=EphemeralSecretStore(),
         settings=SettingsStore(config / "settings.toml"),

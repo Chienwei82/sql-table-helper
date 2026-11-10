@@ -9,7 +9,7 @@ dropped connection offers a reconnect **without discarding staged changes**.
 
 import pytest
 
-from sql_table_swiss_knife.services.cellview import (
+from mssql_manager_tui.services.cellview import (
     LONG_TEXT_CHARS,
     CellKind,
     cell_view,
@@ -17,7 +17,7 @@ from sql_table_swiss_knife.services.cellview import (
     truncate,
     wrap_text,
 )
-from sql_table_swiss_knife.services.connection import is_connection_lost
+from mssql_manager_tui.services.connection import is_connection_lost
 
 # -- the cell model ---------------------------------------------------------
 

@@ -10,8 +10,8 @@ from unittest import mock
 
 import pytest
 
-from sql_table_swiss_knife.domain import Environment
-from sql_table_swiss_knife.storage.audit import (
+from mssql_manager_tui.domain import Environment
+from mssql_manager_tui.storage.audit import (
     AuditEntry,
     AuditLog,
     AuditLogError,
@@ -151,7 +151,7 @@ def test_the_log_is_never_world_readable_even_while_being_written(tmp_path: Path
         seen.append(os.fstat(descriptor).st_mode & 0o777)
         return descriptor
 
-    with mock.patch("sql_table_swiss_knife.storage.audit.os.open", watching_open):
+    with mock.patch("mssql_manager_tui.storage.audit.os.open", watching_open):
         log.record(make_entry())
 
     assert seen, "the file was not created through os.open"

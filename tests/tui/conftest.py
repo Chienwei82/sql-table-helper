@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 from textual.app import App
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     AuthMode,
     CheckConstraint,
     Column,
@@ -26,12 +26,12 @@ from sql_table_swiss_knife.domain import (
     Trigger,
     UniqueConstraint,
 )
-from sql_table_swiss_knife.storage import (
+from mssql_manager_tui.storage import (
     EphemeralSecretStore,
     ProfileStore,
     SettingsStore,
 )
-from sql_table_swiss_knife.tui.app import SwissKnifeApp
+from mssql_manager_tui.tui.app import MssqlManagerApp
 from tests.fakes import FakeProvider
 
 # -- catalog used by the picker tests ----------------------------------
@@ -276,10 +276,10 @@ def active_screen[S](app: App[None], screen_type: type[S]) -> S:
     return cast("S", app.screen)
 
 
-#: Builds a fully injected :class:`SwissKnifeApp` (extra kwargs override the defaults).
+#: Builds a fully injected :class:`MssqlManagerApp` (extra kwargs override the defaults).
 #: ``provider=`` swaps the fake provider, which is how a test drives a rollback or a
 #: concurrency conflict without a database.
-AppFactory = Callable[..., SwissKnifeApp]
+AppFactory = Callable[..., MssqlManagerApp]
 
 
 @pytest.fixture
@@ -318,7 +318,7 @@ def app_factory(tmp_path: Path, provider: FakeProvider) -> AppFactory:
     profiles = ProfileStore(tmp_path / "profiles.toml")
     fixture_provider = provider
 
-    def build(*, provider: FakeProvider | None = None, **kwargs: object) -> SwissKnifeApp:
+    def build(*, provider: FakeProvider | None = None, **kwargs: object) -> MssqlManagerApp:
         active = provider if provider is not None else fixture_provider
         options: dict[str, object] = {
             "profiles": profiles,
@@ -327,7 +327,7 @@ def app_factory(tmp_path: Path, provider: FakeProvider) -> AppFactory:
             "provider_factory": lambda name: active,
         }
         options.update(kwargs)
-        return SwissKnifeApp(**options)  # type: ignore[arg-type]
+        return MssqlManagerApp(**options)  # type: ignore[arg-type]
 
     return build
 

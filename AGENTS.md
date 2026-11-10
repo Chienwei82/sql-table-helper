@@ -6,7 +6,7 @@ Instructions for AI coding agents (and humans) working in this repository.
 an import that "looks harmless" will fail the build. The rules below are not stylistic
 preferences — breaking one breaks `lint-imports`, `mypy` or a test.
 
-- Project: `sql-table-manager` (distribution) / `sql_table_swiss_knife` (import
+- Project: `mssql-manager-tui` (distribution) / `mssql_manager_tui` (import
   package), in a repo directory named `sql-table-helper`. **Import with the underscore
   name**, always.
 - Human-facing docs: [README.md](README.md). Requirements: [SPEC.md](SPEC.md). Design
@@ -121,7 +121,7 @@ into `services/` and have the screen call it.
 | domain / services / providers | plain `pytest` | decisions as pure functions |
 | TUI | Textual `Pilot` (`run_test`), driven key by key | real interactions |
 | visual | `pytest-textual-snapshot` (SVGs) | layout regressions; also the README images |
-| live | `pytest -m live`, needs `SWISSKNIFE_TEST_DB_URL` | a real SQL Server |
+| live | `pytest -m live`, needs `MSSQL_MANAGER_TEST_DB_URL` | a real SQL Server |
 | architecture | `lint-imports` | the layering |
 
 Fast inner loop: `uv run pytest tests/unit -q` (no terminal, no database, seconds). Full

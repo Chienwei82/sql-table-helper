@@ -11,15 +11,15 @@ from textual.coordinate import Coordinate
 from textual.pilot import Pilot
 from textual.widgets import Input, Static
 
-from sql_table_swiss_knife.domain import ChangeKind
-from sql_table_swiss_knife.domain.catalog import TableSummary
-from sql_table_swiss_knife.services.sqlpreview import RowAction
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.screens import (
+from mssql_manager_tui.domain import ChangeKind
+from mssql_manager_tui.domain.catalog import TableSummary
+from mssql_manager_tui.services.sqlpreview import RowAction
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.screens import (
     CellEditorScreen,
     TableEditorScreen,
 )
-from sql_table_swiss_knife.tui.widgets import DataGrid
+from mssql_manager_tui.tui.widgets import DataGrid
 from tests.fakes import FakeProvider
 from tests.tui.conftest import SAMPLE_TABLES, AppFactory, active_screen, make_provider
 

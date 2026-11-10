@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     ForeignKey,
@@ -20,7 +20,7 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     UniqueConstraint,
 )
-from sql_table_swiss_knife.services.validation import (
+from mssql_manager_tui.services.validation import (
     VERIFIED_BY_DATABASE,
     HintLevel,
     parse_value,

@@ -7,7 +7,7 @@ detail behind.
 
 import pytest
 
-from sql_table_swiss_knife.domain import (
+from mssql_manager_tui.domain import (
     CheckConstraint,
     Column,
     PrimaryKey,
@@ -15,7 +15,7 @@ from sql_table_swiss_knife.domain import (
     TableKind,
     Trigger,
 )
-from sql_table_swiss_knife.services.inspector import InspectorService, Severity
+from mssql_manager_tui.services.inspector import InspectorService, Severity
 
 COLUMNS = (
     Column("Code", 1, "char", 2, None, None, False, None, False, is_primary_key=True),

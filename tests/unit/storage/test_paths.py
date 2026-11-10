@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from sql_table_swiss_knife.storage import paths
-from sql_table_swiss_knife.storage.paths import (
+from mssql_manager_tui.storage import paths
+from mssql_manager_tui.storage.paths import (
     APP_NAME,
     KEYBINDINGS_ENV,
-    LEGACY_APP_NAME,
+    LEGACY_APP_NAMES,
     atomic_write,
     audit_log_path,
     config_dir,
     keybindings_path,
-    legacy_config_dir,
+    legacy_config_dirs,
     migrate_legacy_config,
     profiles_path,
     settings_path,
@@ -106,27 +106,29 @@ def test_atomic_write_uses_a_temporary_name_unique_to_the_writer(tmp_path: Path)
     assert len(seen) == 2
 
 
-# -- the rename: config migration (sql-table-swiss-knife → sql-table-manager) ---------
+# -- the rename: config migration (sql-table-swiss-knife → sql-table-manager →
+#    mssql-manager-tui) -------------------------------------------------------
 
 
 def test_the_app_name_is_the_new_one() -> None:
     """The name drives the config dir *and* the OS-keyring service; pin both facts."""
-    assert APP_NAME == "sql-table-manager"
-    assert LEGACY_APP_NAME == "sql-table-swiss-knife"
+    assert APP_NAME == "mssql-manager-tui"
+    assert LEGACY_APP_NAMES == ("sql-table-manager", "sql-table-swiss-knife")
 
 
-def test_legacy_config_dir_is_none_when_the_dir_is_pinned(
+def test_legacy_config_dirs_is_empty_when_the_dir_is_pinned(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """With the env override, both names point at one place, so there is nothing to move."""
+    """With the env override, every name points at one place, so there is nothing to move."""
     monkeypatch.setenv(paths.CONFIG_DIR_ENV, str(tmp_path))
-    assert legacy_config_dir() is None
+    assert legacy_config_dirs() == ()
 
 
-def test_legacy_config_dir_uses_the_old_app_name(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_config_dirs_uses_the_old_app_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(paths.CONFIG_DIR_ENV, raising=False)
-    legacy = legacy_config_dir()
-    assert legacy is not None and LEGACY_APP_NAME in legacy.parts
+    legacy = legacy_config_dirs()
+    assert len(legacy) == len(LEGACY_APP_NAMES)
+    assert all(name in Path(p).parts for p, name in zip(legacy, LEGACY_APP_NAMES, strict=True))
 
 
 def test_migration_copies_a_legacy_directory_into_the_new_one(tmp_path: Path) -> None:

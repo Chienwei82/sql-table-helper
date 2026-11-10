@@ -1,9 +1,9 @@
 """Fixtures for live SQL Server integration tests.
 
-The whole module is skipped unless ``SWISSKNIFE_TEST_DB_URL`` points at a reachable
+The whole module is skipped unless ``MSSQL_MANAGER_TEST_DB_URL`` points at a reachable
 server, e.g.::
 
-    export SWISSKNIFE_TEST_DB_URL="mssql://sa:SwissKnife%212022_Test@localhost:1433/SwissKnifeSample"
+    export MSSQL_MANAGER_TEST_DB_URL="mssql://sa:MssqlManager%212022_Test@localhost:1433/MssqlManagerSample"
     uv run pytest -m live
 
 Start the server with ``cd tests/live && docker compose up -d``.
@@ -17,13 +17,13 @@ from urllib.parse import unquote, urlparse
 
 import pytest
 
-from sql_table_swiss_knife.domain import AuthMode, ConnectionOptions, ConnectionProfile
+from mssql_manager_tui.domain import AuthMode, ConnectionOptions, ConnectionProfile
 
 #: Points at the docker compose server in tests/live/docker-compose.yml.
-DEFAULT_TEST_DB_URL = "mssql://sa:SwissKnife%212022_Test@localhost:1433/SwissKnifeSample"
+DEFAULT_TEST_DB_URL = "mssql://sa:MssqlManager%212022_Test@localhost:1433/MssqlManagerSample"
 
 #: Environment variable enabling the live suite.
-TEST_DB_URL_ENV = "SWISSKNIFE_TEST_DB_URL"
+TEST_DB_URL_ENV = "MSSQL_MANAGER_TEST_DB_URL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +77,9 @@ def _parse_url(url: str) -> LiveServer:
 @pytest.fixture(scope="session")
 def live_server() -> Iterator[LiveServer]:
     """The live server description, or a skip when the server is not available."""
-    url = os.environ.get(TEST_DB_URL_ENV, DEFAULT_TEST_DB_URL)
+    url = os.environ.get(TEST_DB_URL_ENV)
+    if not url:
+        pytest.skip(_unavailable("MSSQL_MANAGER_TEST_DB_URL is not set"))
     try:
         server = _parse_url(url)
     except ValueError as exc:
@@ -99,7 +101,7 @@ def live_server() -> Iterator[LiveServer]:
 @pytest.fixture
 async def mssql_provider() -> AsyncIterator[Any]:
     """An ``MssqlProvider`` instance for the live suite."""
-    from sql_table_swiss_knife.providers import get_provider
+    from mssql_manager_tui.providers import get_provider
 
     yield get_provider("mssql")
 
@@ -107,7 +109,7 @@ async def mssql_provider() -> AsyncIterator[Any]:
 @pytest.fixture
 async def live_connection(live_server: LiveServer, mssql_provider: Any) -> AsyncIterator[Any]:
     """A connected :class:`MssqlConnection`, disconnected after the test."""
-    from sql_table_swiss_knife.providers.mssql.provider import MssqlConnection
+    from mssql_manager_tui.providers.mssql.provider import MssqlConnection
 
     conn: MssqlConnection | None = None
     try:
@@ -165,7 +167,7 @@ _RESET_STATEMENTS: tuple[str, ...] = (
     # Written by the placeholder-named-columns test; without a reset here its UPDATE
     # survives into the next run and the test fails on the leftover row.
     "DELETE FROM [dbo].[PlaceholderNames]",
-    "DBCC CHECKDB ('SwissKnifeSample') WITH NO_INFOMSGS, PHYSICAL_ONLY",
+    "DBCC CHECKDB ('MssqlManagerSample') WITH NO_INFOMSGS, PHYSICAL_ONLY",
 )
 
 _RESEED_STATEMENTS: tuple[str, ...] = (

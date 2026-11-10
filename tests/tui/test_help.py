@@ -8,9 +8,9 @@ the question the screen exists to answer.
 from textual.app import App
 from textual.widgets import Static
 
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.keymap import Keymap
-from sql_table_swiss_knife.tui.screens import HelpScreen
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.keymap import Keymap
+from mssql_manager_tui.tui.screens import HelpScreen
 from tests.fakes import FakeProvider
 from tests.tui.conftest import AppFactory, active_screen
 

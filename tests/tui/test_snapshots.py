@@ -19,13 +19,13 @@ from textual.app import App
 from textual.coordinate import Coordinate
 from textual.pilot import Pilot
 
-from sql_table_swiss_knife.domain import Environment
-from sql_table_swiss_knife.domain.catalog import Table
-from sql_table_swiss_knife.providers import ConnectError
-from sql_table_swiss_knife.storage import ProfileStore
-from sql_table_swiss_knife.tui.app import SwissKnifeApp
-from sql_table_swiss_knife.tui.screens import TableBrowserScreen, TableEditorScreen
-from sql_table_swiss_knife.tui.widgets import DataGrid
+from mssql_manager_tui.domain import Environment
+from mssql_manager_tui.domain.catalog import Table
+from mssql_manager_tui.providers import ConnectError
+from mssql_manager_tui.storage import ProfileStore
+from mssql_manager_tui.tui.app import MssqlManagerApp
+from mssql_manager_tui.tui.screens import TableBrowserScreen, TableEditorScreen
+from mssql_manager_tui.tui.widgets import DataGrid
 from tests.fakes import FakeProvider
 from tests.tui.conftest import (
     AUDIT,
@@ -50,7 +50,7 @@ SIZE: tuple[int, int] = (110, 32)
 async def _connect(pilot: Pilot[App[None]]) -> None:
     """Connect the app and settle on the table browser."""
     app = pilot.app
-    assert isinstance(app, SwissKnifeApp)
+    assert isinstance(app, MssqlManagerApp)
     await app.connection.connect(app.connection.get_profile("catalog"))
     app.push_screen(TableBrowserScreen())
     await pilot.pause()
@@ -82,7 +82,7 @@ def test_connections_screen_connected(
 
     async def run_before(pilot: Pilot[App[None]]) -> None:
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         await app.connection.connect(seeded_profiles.get("catalog"))
         await pilot.pause()
 
@@ -131,7 +131,7 @@ def test_table_browser_no_matches(
 async def _open_table(pilot: Pilot[App[None]], table: Table) -> None:
     """Connect and open ``table`` in the editor workspace, then let the workers finish."""
     app = pilot.app
-    assert isinstance(app, SwissKnifeApp)
+    assert isinstance(app, MssqlManagerApp)
     await app.connection.connect(app.connection.get_profile("catalog"))
     app.push_screen(TableEditorScreen(table.summary))
     await _settle(pilot)
@@ -193,7 +193,7 @@ def _snapshot_in_theme(
 
     async def run_before(pilot: Pilot[App[None]]) -> None:
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         app.set_theme(theme)
         await pilot.pause()
         await _connect(pilot)
@@ -318,7 +318,7 @@ def test_apply_confirmation_development(
     async def run_before(pilot: Pilot[App[None]]) -> None:
         await _open_table(pilot, COUNTRY)
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         screen = cast("TableEditorScreen", app.screen)
         key, _column, _row_index, _ = screen._cursor()
         assert key is not None
@@ -337,7 +337,7 @@ def test_apply_confirmation_production(
     async def run_before(pilot: Pilot[App[None]]) -> None:
         await _open_table(pilot, COUNTRY)
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         app.safety.environment = Environment.PRODUCTION
         app.safety.read_only = False
         screen = cast("TableEditorScreen", app.screen)
@@ -361,7 +361,7 @@ def test_cell_expand_view(
     async def run_before(pilot: Pilot[App[None]]) -> None:
         await _open_table(pilot, WIDE_NOTES)
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         screen = cast("TableEditorScreen", app.screen)
         grid = screen.query_one("#editor-grid", DataGrid)
         grid.cursor_coordinate = Coordinate(0, 1)
@@ -380,7 +380,7 @@ def test_connection_lost_reconnect_prompt(
     async def run_before(pilot: Pilot[App[None]]) -> None:
         await _open_table(pilot, COUNTRY)
         app = pilot.app
-        assert isinstance(app, SwissKnifeApp)
+        assert isinstance(app, MssqlManagerApp)
         screen = cast("TableEditorScreen", app.screen)
         key, _column, _row_index, _ = screen._cursor()
         assert key is not None
